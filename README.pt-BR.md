@@ -10,9 +10,12 @@ Ferramenta única para bypass/supressão de MDM no macOS. Funciona do Modo de Re
 # Homebrew (mais fácil)
 brew install mateussiqueira/unleash/unleash
 
-# Download direto
-curl -L https://raw.githubusercontent.com/mateussiqueira/unleash/main/unleash-standalone.sh -o unleash
-chmod +x unleash && sudo ./unleash
+# Download direto (dentro de uma pasta: o backup é gravado um nível acima do script)
+REPO=ejams1/unleash      # troque por mateussiqueira/unleash quando o upstream receber as correções
+mkdir -p ~/unleash
+curl -fsSL "https://raw.githubusercontent.com/$REPO/main/unleash-standalone.sh" \
+  -o ~/unleash/unleash-standalone.sh
+chmod +x ~/unleash/unleash-standalone.sh && sudo ~/unleash/unleash-standalone.sh
 ```
 
 ## Como usar
@@ -33,6 +36,31 @@ Escolha "Full bypass" no menu. Ou use a linha de comando:
 ```bash
 "/Volumes/SeuSSD/unleash/unleash" bypass
 ```
+
+### Sem pendrive (no Recovery, com internet)
+
+O Terminal do Recovery já é root, então não use `sudo`. Baixe **para dentro de
+uma pasta**: o `backup` grava um nível acima do script, e um arquivo solto em
+`/tmp` tentaria gravar em `/`, que é somente leitura no Recovery.
+
+```bash
+REPO=ejams1/unleash      # troque por mateussiqueira/unleash quando o upstream receber as correções
+mkdir -p /tmp/unleash
+curl -fsSL "https://raw.githubusercontent.com/$REPO/main/unleash-standalone.sh" \
+  -o /tmp/unleash/unleash-standalone.sh
+chmod +x /tmp/unleash/unleash-standalone.sh
+cd /tmp/unleash
+
+./unleash-standalone.sh version
+./unleash-standalone.sh doctor            # caminho, módulos e modo Recovery
+./unleash-standalone.sh check             # relatório antes de formatar
+./unleash-standalone.sh test all          # simulação: não grava nada
+./unleash-standalone.sh backup            # salvo em /tmp/.unleash-backup
+./unleash-standalone.sh suppress          # ou: bypass (cria um usuário admin)
+```
+
+`/tmp` é um disco em memória no Recovery: copie `/tmp/.unleash-backup` para um
+pendrive antes de reiniciar se quiser usar `restore` depois.
 
 ## Comandos principais
 

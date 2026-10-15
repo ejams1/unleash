@@ -30,12 +30,41 @@ Pick "Full bypass" from the menu. Or if you know what you want:
 
 No internet needed. No SIP to disable. No typing long URLs.
 
-If you do have internet in Recovery:
+### With internet instead (curl, no USB drive)
+
+The Recovery Terminal is already root, so no `sudo` here. Download **into a
+folder**: `backup` writes to the folder *above* the script, and a loose file in
+`/tmp` would try to write to `/`, which is read-only in Recovery.
 
 ```bash
-curl -L https://raw.githubusercontent.com/mateussiqueira/unleash/main/unleash-standalone.sh -o /tmp/unleash
-chmod +x /tmp/unleash && /tmp/unleash bypass
+REPO=ejams1/unleash      # swap for mateussiqueira/unleash once upstream has these fixes
+mkdir -p /tmp/unleash
+curl -fsSL "https://raw.githubusercontent.com/$REPO/main/unleash-standalone.sh" \
+  -o /tmp/unleash/unleash-standalone.sh
+chmod +x /tmp/unleash/unleash-standalone.sh
+cd /tmp/unleash
+
+./unleash-standalone.sh version    # unleash v2.0.0
+./unleash-standalone.sh doctor     # script path, modules, Recovery status
+./unleash-standalone.sh check      # pre-format / pre-upgrade safety report
 ```
+
+Look before you leap — the dry run writes nothing:
+
+```bash
+./unleash-standalone.sh test all
+```
+
+Then the real thing (`suppress` keeps your accounts, `bypass` creates an admin
+user and skips Setup Assistant):
+
+```bash
+./unleash-standalone.sh backup      # saved to /tmp/.unleash-backup
+./unleash-standalone.sh suppress    # or: *.sh bypass
+```
+
+`/tmp` is a RAM disk in Recovery, so copy `/tmp/.unleash-backup` to a USB drive
+before rebooting if you want `restore` to still find it later.
 
 ---
 
