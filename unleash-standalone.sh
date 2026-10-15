@@ -180,72 +180,117 @@ confirm() {
   esac
 }
 
-CONFIG_FILE="$HOME/.unleash.conf"
 
-load_config() {
-  [ -f "$CONFIG_FILE" ] || return 0
-
-  while IFS='=' read -r key value; do
-    key="${key// /}"
-    value="${value// /}"
-    [ -z "$key" ] && continue
-    case "$key" in
-      WEBHOOK) DISCORD_WEBHOOK="$value" ;;
-      LOG_LEVEL) [ "$value" = "verbose" ] && VERBOSE=true ;;
-      LOG_FILE) LOG_FILE="$value" ;;
-    esac
-  done < "$CONFIG_FILE"
+# Home directory of the user who invoked the tool. It normally runs under
+# sudo, where $HOME is /var/root, and the settings would land in the wrong
+# place (and be invisible to the user).
+unleash_user_home() {
+	local u="${SUDO_USER:-}"
+	case "$u" in
+		""|root) printf '%s' "${HOME:-/var/root}" ;;
+		*) if [ -d "/Users/$u" ]; then
+			printf '%s' "/Users/$u"
+		else
+			printf '%s' "${HOME:-/var/root}"
+		fi ;;
+	esac
 }
 
+CONFIG_FILE="$(unleash_user_home)/.unleash.conf"
+
+load_config() {
+	[ -f "$CONFIG_FILE" ] || return 0
+
+	local line key value
+	# `read` alone would silently drop a final line with no trailing newline.
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in
+			""|\#*) continue ;;
+		esac
+		key="${line%%=*}"
+		[ "$key" = "$line" ] && continue
+		value="${line#*=}"
+		key="${key% }"
+		key="${key# }"
+		case "$key" in
+			WEBHOOK) DISCORD_WEBHOOK="$value" ;;
+			LOG_LEVEL) [ "$value" = "verbose" ] && VERBOSE=true ;;
+			LOG_FILE) LOG_FILE="$value" ;;
+		esac
+	done < "$CONFIG_FILE"
+}
+
+valid_config_key() {
+	case "$1" in
+		WEBHOOK|LOG_LEVEL|LOG_FILE) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+# The file is rewritten with grep+mv rather than sed: a value containing "/"
+# or "&" used to break the sed replacement expression, and `set -e` then
+# killed the whole script on `unleash config set WEBHOOK https://...`.
 save_config() {
-  local key="$1"
-  local value="$2"
-  local tmp
+	local key="$1"
+	local value="$2"
+	local tmp="$CONFIG_FILE.tmp.$$"
 
-  [ -f "$CONFIG_FILE" ] || touch "$CONFIG_FILE"
+	valid_config_key "$key" || error_exit "Unknown setting: $key (expected WEBHOOK, LOG_LEVEL or LOG_FILE)"
+	case "$value" in
+		*$'\n'*) error_exit "The value must be a single line" ;;
+	esac
 
-  if grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
-    sed -i '' "s/^${key}=.*/${key}=${value}/" "$CONFIG_FILE"
-  else
-    echo "${key}=${value}" >> "$CONFIG_FILE"
-  fi
-  success "Saved $key to $CONFIG_FILE"
+	touch "$CONFIG_FILE"
+	grep -v "^${key}=" "$CONFIG_FILE" > "$tmp" 2>/dev/null || true
+	printf '%s=%s\n' "$key" "$value" >> "$tmp"
+	mv "$tmp" "$CONFIG_FILE"
+	chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+	success "Saved $key to $CONFIG_FILE"
+}
+
+remove_config_key() {
+	local key="$1"
+	local tmp="$CONFIG_FILE.tmp.$$"
+	[ -f "$CONFIG_FILE" ] || return 0
+	grep -v "^${key}=" "$CONFIG_FILE" > "$tmp" 2>/dev/null || true
+	mv "$tmp" "$CONFIG_FILE"
 }
 
 cmd_config() {
-  header "Configuration"
+	header "Configuration"
 
-  case "${2:-show}" in
-    show)
-      if [ ! -f "$CONFIG_FILE" ]; then
-        info "No config file at $CONFIG_FILE"
-        return 0
-      fi
-      step "Current settings ($CONFIG_FILE)"
-      cat "$CONFIG_FILE" | sed 's/^/  /'
-      ;;
-    set)
-      local key="$3"
-      local value="$4"
-      [ -z "$key" ] || [ -z "$value" ] && {
-        info "Usage: ./unleash config set KEY VALUE"
-        info "Keys: WEBHOOK, LOG_LEVEL (verbose), LOG_FILE"
-        return 1
-      }
-      save_config "$key" "$value"
-      ;;
-    unset)
-      local key="$3"
-      [ -z "$key" ] && { info "Usage: ./unleash config unset KEY"; return 1; }
-      if [ -f "$CONFIG_FILE" ]; then
-        sed -i '' "/^${key}=/d" "$CONFIG_FILE"
-        success "Removed $key from config"
-      fi
-      ;;
-    *)
-      info "Usage: ./unleash config {show|set KEY VALUE|unset KEY}"
-      ;;
-  esac
+	case "${2:-show}" in
+		show)
+			step "Config file: $CONFIG_FILE"
+			if [ ! -f "$CONFIG_FILE" ]; then
+				info "No config file yet."
+				info "Create one with: ./unleash config set KEY VALUE"
+				return 0
+			fi
+			sed 's/^/  /' "$CONFIG_FILE"
+			;;
+		set)
+			local key="${3:-}"
+			local value="${4:-}"
+			[ -z "$key" ] || [ -z "$value" ] && {
+				info "Usage: ./unleash config set KEY VALUE"
+				info "Keys: WEBHOOK, LOG_LEVEL (verbose), LOG_FILE"
+				return 1
+			}
+			save_config "$key" "$value"
+			;;
+		unset)
+			local key="${3:-}"
+			[ -z "$key" ] && { info "Usage: ./unleash config unset KEY"; return 1; }
+			if [ -f "$CONFIG_FILE" ]; then
+				remove_config_key "$key"
+				success "Removed $key from config"
+			fi
+			;;
+		*)
+			info "Usage: ./unleash config {show|set KEY VALUE|unset KEY}"
+			;;
+	esac
 }
 
 
@@ -253,7 +298,7 @@ is_recovery() {
 	[ -d "/System/Installation" ] && return 0
 
 	local vol
-	vol=$(diskutil info / 2>/dev/null | awk -F': *' '/Volume Name/{print $2}' | xargs)
+	vol=$(diskutil info / 2>/dev/null | awk -F': *' '/Volume Name/{print $2}' | awk '{sub(/[ \t]+$/, ""); print}')
 	case "$vol" in
 		"Recovery"*|"macOS Base"*|"macOS Installer"*) return 0 ;;
 	esac
@@ -342,7 +387,7 @@ detect_system_volume() {
 
 	for vol in /Volumes/*; do
 		if [ -d "$vol/System" ] && [ "$vol" != "$data_mount" ]; then
-			basename "$vol"
+			echo "${vol##*/}"
 			return 0
 		fi
 	done
@@ -368,50 +413,52 @@ resolve_target_volumes() {
 }
 
 
+# Messages go to stdout so callers can capture them; the exit status carries
+# the verdict. (They used to go to stderr, so `msg=$(validate_username ...)`
+# was always empty and the warning line rendered with no text.)
 validate_username() {
 	local u="$1"
-	[ -z "$u" ] && { echo "Username cannot be empty" >&2; return 1; }
-	[ ${#u} -gt 31 ] && { echo "Username too long (max 31 chars)" >&2; return 1; }
-	[[ "$u" =~ ^[a-zA-Z0-9_-]+$ ]] \
-		|| { echo "Use only letters, numbers, underscore, hyphen" >&2; return 1; }
-	[[ "$u" =~ ^[a-zA-Z_] ]] \
-		|| { echo "Must start with a letter or underscore" >&2; return 1; }
+	[ -n "$u" ] || { echo "Username cannot be empty"; return 1; }
+	[ ${#u} -le 31 ] || { echo "Username too long (max 31 chars)"; return 1; }
+	case "$u" in
+		*[!a-zA-Z0-9_-]*) echo "Use only letters, numbers, underscore, hyphen"; return 1 ;;
+		[!a-zA-Z_]*) echo "Must start with a letter or underscore"; return 1 ;;
+	esac
 	return 0
 }
 
 validate_password() {
-	[ -z "$1" ] && { echo "Password cannot be empty" >&2; return 1; }
-	[ ${#1} -lt 4 ] && { echo "Minimum 4 characters" >&2; return 1; }
+	[ -n "$1" ] || { echo "Password cannot be empty"; return 1; }
+	[ ${#1} -ge 4 ] || { echo "Minimum 4 characters"; return 1; }
 	return 0
 }
 
 prompt_username() {
 	local var_name="$1"
-	local value
+	local value="" msg=""
 	while true; do
-		read -p "Username (default 'Apple'): " value
-		value="${value:=Apple}"
+		read -r -p "Username (default 'Apple'): " value || value=""
+		[ -n "$value" ] || value="Apple"
 		if msg=$(validate_username "$value"); then
-			eval "$var_name=\"$value\""
+			printf -v "$var_name" '%s' "$value"
 			return 0
-		else
-			warn "$msg"
 		fi
+		warn "$msg"
 	done
 }
 
 prompt_password() {
 	local var_name="$1"
-	local value
+	local value="" msg=""
 	while true; do
-		read -p "Password (default '1234'): " value
-		value="${value:=1234}"
+		read -r -s -p "Password (default '1234'): " value || value=""
+		echo ""
+		[ -n "$value" ] || value="1234"
 		if msg=$(validate_password "$value"); then
-			eval "$var_name=\"$value\""
+			printf -v "$var_name" '%s' "$value"
 			return 0
-		else
-			warn "$msg"
 		fi
+		warn "$msg"
 	done
 }
 
@@ -464,12 +511,24 @@ create_admin_user() {
 	dscl -f "$node" localhost -create "/Local/Default/Users/$username" PrimaryGroupID "20" 2>/dev/null
 	dscl -f "$node" localhost -create "/Local/Default/Users/$username" NFSHomeDirectory "/Users/$username" 2>/dev/null
 
+	# An account without GeneratedUID can be missing from the login window on
+	# recent macOS releases, and FileVault grants keyed to it misbehave.
+	if command -v uuidgen >/dev/null 2>&1; then
+		dscl -f "$node" localhost -create "/Local/Default/Users/$username" GeneratedUID "$(uuidgen)" 2>/dev/null
+	else
+		warn "uuidgen not found — '$username' will have no GeneratedUID"
+	fi
+
 	dscl -f "$node" localhost -passwd "/Local/Default/Users/$username" "$password" 2>/dev/null \
 		|| error_exit "Failed to set password"
 	dscl -f "$node" localhost -append "/Local/Default/Groups/admin" GroupMembership "$username" 2>/dev/null \
 		|| error_exit "Failed to grant admin"
 
 	mkdir -p "$data_mount/Users/$username"
+	# mkdir runs as root, so the home directory would be owned by root:wheel
+	# and every login would produce permission errors.
+	chown -R "$uid:20" "$data_mount/Users/$username" 2>/dev/null || true
+	chmod 700 "$data_mount/Users/$username" 2>/dev/null || true
 	success "Admin '$username' created (UID $uid)"
 }
 
@@ -482,8 +541,39 @@ add_to_filevault() {
 }
 
 
-
 PB=/usr/libexec/PlistBuddy
+
+# Domains blocked in the Data volume's /etc/hosts. Kept in one place: the
+# "N of M blocked" report reads the count from here.
+MDM_DOMAINS=(
+	iprofiles.apple.com
+	deviceenrollment.apple.com
+	mdmenrollment.apple.com
+	acmdm.apple.com
+	axm-adm-mdm.apple.com
+	albert.apple.com
+	gdmf.apple.com
+	ax.init-content.apple.com
+	init-content.apple.com
+	configuration.apple.com
+	xp.apple.com
+	gs.apple.com
+	tb.apple.com
+	vpp.itunes.apple.com
+)
+
+# Remove the hosts entries this tool added (the marker comment and the
+# "0.0.0.0 <domain>" / ":: <domain>" lines) without touching anything else.
+strip_hosts_block() {
+	local hosts="$1"
+	[ -f "$hosts" ] || return 0
+
+	local d
+	for d in "${MDM_DOMAINS[@]}"; do
+		sed -i '' "/[[:space:]]$d\$/d" "$hosts" 2>/dev/null || true
+	done
+	sed -i '' '/# Added by unleash/d' "$hosts" 2>/dev/null || true
+}
 
 suppress_enrollment() {
 	local data_mount="$1"
@@ -491,7 +581,7 @@ suppress_enrollment() {
 	if [ "$DRY_RUN" = true ]; then
 		info "[DRY RUN] Would suppress MDM enrollment on $data_mount"
 		info "[DRY RUN]   - Clear DEP markers in ConfigurationProfiles/Settings"
-		info "[DRY RUN]   - Block 13+ Apple MDM domains in /etc/hosts"
+		info "[DRY RUN]   - Block ${#MDM_DOMAINS[@]} Apple MDM domains in /etc/hosts"
 		info "[DRY RUN]   - Disable 4 enrollment daemons in launchd disabled.plist"
 		info "[DRY RUN]   - Clean MDM artifacts from /Users/*/Library"
 		return 0
@@ -517,28 +607,16 @@ suppress_enrollment() {
 	fi
 
 	step "Blocking enrollment domains (Data volume hosts)..."
-	[ -f "$hosts" ] || { mkdir -p "$(dirname "$hosts")"; touch "$hosts"; }
+	if [ ! -f "$hosts" ]; then
+		mkdir -p "${hosts%/*}"
+		touch "$hosts"
+	fi
 	grep -q "Added by unleash" "$hosts" 2>/dev/null || {
 		echo "" >>"$hosts"
 		echo "# Added by unleash — DEP enrollment block" >>"$hosts"
 	}
 
-	local domains=(
-		iprofiles.apple.com
-		deviceenrollment.apple.com
-		mdmenrollment.apple.com
-		acmdm.apple.com
-		axm-adm-mdm.apple.com
-		albert.apple.com
-		gdmf.apple.com
-		ax.init-content.apple.com
-		init-content.apple.com
-		configuration.apple.com
-		xp.apple.com
-		gs.apple.com
-		tb.apple.com
-		vpp.itunes.apple.com
-	)
+	local domains=("${MDM_DOMAINS[@]}")
 	[ -n "$mdm_host" ] && domains+=("$mdm_host")
 
 	local d
@@ -565,7 +643,8 @@ suppress_enrollment() {
 	for home in "$data_mount/Users/"*/; do
 		[ -d "$home/Library" ] || continue
 		local user
-		user=$(basename "$home")
+		user=${home%/}
+		user=${user##*/}
 		info "Cleaning: $user"
 		rm -rf "$home/Library/Preferences/com.apple.mdm"* 2>/dev/null || true
 		rm -rf "$home/Library/Preferences/com.apple.ManagedClient"* 2>/dev/null || true
@@ -575,14 +654,14 @@ suppress_enrollment() {
 			[ -f "$agent" ] || continue
 			if grep -qi mdm "$agent" 2>/dev/null || grep -qi enrollment "$agent" 2>/dev/null; then
 				rm -f "$agent"
-				info "  removed LaunchAgent: $(basename "$agent")"
+				info "  removed LaunchAgent: ${agent##*/}"
 			fi
 		done
 	done
 	success "User-level MDM artifacts removed"
 
 	step "Disabling enrollment daemons..."
-	mkdir -p "$(dirname "$ldp")"
+	mkdir -p "${ldp%/*}"
 	[ -f "$ldp" ] || printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict/></plist>\n' >"$ldp"
 	for label in \
 		com.apple.ManagedClient.enroll \
@@ -590,7 +669,8 @@ suppress_enrollment() {
 		com.apple.mdmclient.daemon.runatboot \
 		com.apple.activationd; do
 		$PB -c "Add :$label bool true" "$ldp" 2>/dev/null \
-			|| $PB -c "Set :$label true" "$ldp" 2>/dev/null
+			|| $PB -c "Set :$label true" "$ldp" 2>/dev/null \
+			|| warn "Could not disable $label in $ldp"
 		info "disabled $label"
 	done
 	success "Enrollment daemons disabled (4 overrides)"
@@ -630,6 +710,7 @@ full_bypass_mode() {
 	echo ""
 	step "Creating temporary admin account"
 
+	local realName=""
 	prompt_default realName "Full name" "Apple"
 
 	local username
@@ -648,7 +729,7 @@ full_bypass_mode() {
 		fi
 	done
 
-	local passw
+	local passw=""
 	prompt_password passw
 
 	local uid
@@ -674,23 +755,44 @@ full_bypass_mode() {
 }
 
 
-BACKUP_DIR="$(dirname "$(dirname "$0")")/.unleash-backup"
+# Backup directory sits next to the unleash folder (not inside it), so it
+# travels with the USB stick / checkout it was taken from. Derived from
+# SCRIPT_DIR without dirname (not guaranteed in a minimal shell); history and
+# uninstall read the same variable, so the three can no longer disagree.
+_backup_base="${SCRIPT_DIR:-}"
+_backup_base="${_backup_base%/}"
+case "$_backup_base" in
+	"") _backup_base="." ;;
+	*/*) _backup_base="${_backup_base%/*}" ;;
+	*) _backup_base="." ;;
+esac
+BACKUP_DIR="$_backup_base/.unleash-backup"
+unset _backup_base
 
 check_disk_space() {
 	local data_mount="$1"
 	local needed_kb=10240
 	local available_kb
 	available_kb=$(df -k "$data_mount" 2>/dev/null | tail -1 | awk '{print $4}')
-	if [ -n "$available_kb" ] && [ "$available_kb" -lt "$needed_kb" ]; then
+	if [ -n "$available_kb" ] && [ "$available_kb" -lt "$needed_kb" ] 2>/dev/null; then
 		warn "Low disk space: $(echo "$available_kb" | awk '{printf "%.0f MB", $1/1024}') available"
-		echo -n "Continue anyway? [y/N] "
-		read -r answer
-		[ "$answer" != "y" ] && [ "$answer" != "Y" ] && error_exit "Aborted by user"
+		echo -n "Continue anyway? [y/N] " >&2
+		local answer=""
+		read -r answer || answer=""
+		case "$answer" in
+			y|Y) ;;
+			*) error_exit "Aborted by user" ;;
+		esac
 	fi
 }
 
 backup_state() {
 	local data_mount="$1"
+
+	if skip_if_dry_run "save hosts, DEP markers and launchd state to $BACKUP_DIR"; then
+		return 0
+	fi
+
 	mkdir -p "$BACKUP_DIR"
 	check_disk_space "$data_mount"
 	step "Saving backup to $BACKUP_DIR"
@@ -736,9 +838,16 @@ restore_state() {
 	step "Restoring from backup ($(cat "$BACKUP_DIR/timestamp"))"
 	echo -e "${YEL}Target: $data_mount${NC}"
 
+	local hosts="$data_mount/private/etc/hosts"
+
 	if [ -f "$BACKUP_DIR/hosts.backup" ]; then
-		cp "$BACKUP_DIR/hosts.backup" "$data_mount/private/etc/hosts"
+		cp "$BACKUP_DIR/hosts.backup" "$hosts"
 		success "hosts restored"
+	else
+		# No pristine copy: strip our own entries rather than only the marker
+		# comment, which used to leave every blocked domain behind.
+		strip_hosts_block "$hosts"
+		success "unleash hosts entries removed"
 	fi
 
 	if [ -d "$BACKUP_DIR/ConfigurationProfiles" ]; then
@@ -750,12 +859,10 @@ restore_state() {
 
 	if [ -f "$BACKUP_DIR/launchd/disabled.plist.backup" ]; then
 		local ldp="$data_mount/private/var/db/com.apple.xpc.launchd/disabled.plist"
-		mkdir -p "$(dirname "$ldp")"
+		mkdir -p "${ldp%/*}"
 		cp "$BACKUP_DIR/launchd/disabled.plist.backup" "$ldp"
 		success "launchd override restored"
 	fi
-
-	sed -i '' '/# Added by unleash/d' "$data_mount/private/etc/hosts" 2>/dev/null || true
 
 	rm -f "$BACKUP_DIR/data_volume_path" "$BACKUP_DIR/timestamp"
 	success "Restore complete"
@@ -926,7 +1033,9 @@ deep_status() {
 		local user_agents
 		user_agents=$(ls "$home/Library/LaunchAgents/" 2>/dev/null | grep -iE "mdm|enrollment|managed" || true)
 		if [ -n "$user_agents" ]; then
-			echo -e "  ${YEL}$(basename "$home"):${NC}"
+			local who="${home%/}"
+			who="${who##*/}"
+			echo -e "  ${YEL}${who}:${NC}"
 			echo "$user_agents" | sed 's/^/    /'
 			found=$((found + 1))
 		fi
@@ -1107,11 +1216,17 @@ install_persist_launchdaemon() {
 		return 0
 	fi
 
-	local unleash_src
-	if [ -n "$SCRIPT_DIR" ]; then
-		unleash_src="$SCRIPT_DIR/unleash"
-	else
-		unleash_src="$(cd "$(dirname "$0")" && pwd)/unleash"
+	# SCRIPT_PATH is the file that is actually running (unleash, or
+	# unleash-standalone.sh when the inlined build is in use), so the
+	# LaunchDaemon points at a file that exists.
+	local unleash_src="${SCRIPT_PATH:-}"
+	if [ -z "$unleash_src" ]; then
+		local _src="$0" _dir
+		_dir="${_src%/*}"
+		if [ "$_dir" = "$_src" ]; then
+			_dir="."
+		fi
+		unleash_src="$(cd "$_dir" && pwd)/${_src##*/}"
 	fi
 
 	step "Installing LaunchDaemon for boot-time persistence..."
@@ -1236,7 +1351,11 @@ ANCHOR
 
 	local pf_conf="${root}${FIREWALL_CONF}"
 	local anchor_line="anchor \"${FIREWALL_ANCHOR}\""
-	local load_line="load anchor \"${FIREWALL_ANCHOR}\" from \"${anchor_file}\""
+	# pf resolves this path at boot, when the Recovery mount is gone: using the
+	# mount-prefixed path left pf unable to load the anchor (and to load
+	# pf.conf at all) after the reboot.
+	local anchor_boot_path="${FIREWALL_ANCHOR_DIR}/${FIREWALL_ANCHOR}"
+	local load_line="load anchor \"${FIREWALL_ANCHOR}\" from \"${anchor_boot_path}\""
 
 	if [ -f "$pf_conf" ]; then
 		if grep -q "com.unleash" "$pf_conf" 2>/dev/null; then
@@ -1345,7 +1464,9 @@ harden_live_os() {
 	step "Removing residual MDM profiles..."
 	if command -v profiles &>/dev/null; then
 		local installed
-		installed=$(profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+		# -output xml writes files into the CWD; stdout-xml prints to stdout.
+		installed=$(profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+		installed="${installed:-0}"
 		if [ "$installed" -gt 0 ]; then
 			sudo profiles -D -F 2>/dev/null && success "Forced profile removal" \
 				|| warn "Profile removal failed"
@@ -1368,8 +1489,13 @@ harden_live_os() {
 				cleaned=$((cleaned + 1))
 			fi
 		done
-		[ "$cleaned" -gt 0 ] && success "$(basename "$home"): removed $cleaned agent(s)" \
-			|| info "$(basename "$home"): clean"
+		local who="${home%/}"
+		who="${who##*/}"
+		if [ "$cleaned" -gt 0 ]; then
+			success "$who: removed $cleaned agent(s)"
+		else
+			info "$who: clean"
+		fi
 	done
 
 	step "Flushing DNS cache..."
@@ -1432,6 +1558,7 @@ harden_status() {
 	ps aux 2>/dev/null | grep -iE "mdm|managedclient|activation" | grep -v grep || info "None running"
 }
 
+
 MDM_BLOCKLIST="mdmenrollment.apple.com deviceenrollment.apple.com iprofiles.apple.com"
 
 install_selective_block() {
@@ -1449,23 +1576,37 @@ install_selective_block() {
   local anchor_file="${anchor_dir}/com.unleash.selective"
   mkdir -p "$anchor_dir"
 
-  > "$anchor_file"
+  : > "$anchor_file"
 
+  local rules=0 d ip
   for d in $MDM_BLOCKLIST; do
     for ip in $(host -t a "$d" 2>/dev/null | awk '/has address/{print $NF}'); do
       echo "block drop out proto {tcp,udp} to {$ip}" >> "$anchor_file"
+      rules=$((rules + 1))
     done
     for ip in $(host -t aaaa "$d" 2>/dev/null | awk '/has IPv6 addr/{print $NF}'); do
       echo "block drop out proto {tcp,udp} to {$ip}" >> "$anchor_file"
+      rules=$((rules + 1))
     done
   done
 
+  # Without DNS there is nothing to block. Loading an empty anchor used to be
+  # reported as a success, which made the "iCloud-safe block" look installed
+  # while it blocked nothing (Recovery has no resolver).
+  if [ "$rules" -eq 0 ]; then
+    rm -f "$anchor_file"
+    error_exit "Could not resolve $MDM_BLOCKLIST — no rules to install. Run this from the booted system, or use 'firewall' for the IP-range block."
+  fi
+
   chmod 644 "$anchor_file"
-  success "Selective anchor written: $anchor_file"
+  success "Selective anchor written: $anchor_file ($rules rules)"
 
   local pf_conf="${root}/etc/pf.conf"
   local anchor_line="anchor \"com.unleash.selective\""
-  local load_line="load anchor \"com.unleash.selective\" from \"${anchor_file}\""
+  # pf reads this path at boot, after the Recovery mount has gone away, so it
+  # must not contain the Recovery prefix.
+  local anchor_boot_path="/etc/pf.anchors/com.unleash.selective"
+  local load_line="load anchor \"com.unleash.selective\" from \"${anchor_boot_path}\""
 
   if [ -f "$pf_conf" ]; then
     if grep -q "com.unleash.selective" "$pf_conf" 2>/dev/null; then
@@ -1493,7 +1634,7 @@ EOF
     success "pf.conf created"
   fi
 
-  if command -v pfctl &>/dev/null; then
+  if command -v pfctl >/dev/null 2>&1; then
     pfctl -e -f "$pf_conf" 2>/dev/null && success "pf rules loaded (iCloud should work)" \
       || warn "pfctl failed"
   fi
@@ -1530,13 +1671,16 @@ run_preformat_check() {
   step "Checking MDM enrollment URL for this device..."
   if command -v curl &>/dev/null; then
     local enroll_check
+    # curl already prints 000 when it cannot connect; `|| echo "000"` added a
+    # second value and turned the comparison into a string that never matched.
     enroll_check=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-      "https://deviceenrollment.apple.com/" 2>/dev/null || echo "000")
-    if [ "$enroll_check" = "000" ] || [ "$enroll_check" = "200" ]; then
-      echo -e "  ${YEL}deviceenrollment.apple.com reachable${NC}"
-    else
-      echo -e "  ${GRN}deviceenrollment.apple.com blocked (code $enroll_check)${NC}"
-    fi
+      "https://deviceenrollment.apple.com/" 2>/dev/null || true)
+    enroll_check="${enroll_check:-000}"
+    case "$enroll_check" in
+      000) echo -e "  ${YEL}Could not reach deviceenrollment.apple.com (offline, blocked or no DNS)${NC}" ;;
+      200) echo -e "  ${YEL}deviceenrollment.apple.com reachable — enrollment can proceed${NC}" ;;
+      *)   echo -e "  ${GRN}deviceenrollment.apple.com answered $enroll_check${NC}" ;;
+    esac
   else
     echo -e "  ${YEL}curl not available, skipping URL check${NC}"
   fi
@@ -1556,7 +1700,8 @@ run_preformat_check() {
   step "Checking installed profiles..."
   if command -v profiles &>/dev/null; then
     local profile_count
-    profile_count=$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)
+    profile_count=$(sudo profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+    profile_count="${profile_count:-0}"
     if [ "$profile_count" -gt 0 ]; then
       echo -e "  ${YEL}$profile_count profile(s) installed${NC}"
       clean=false
@@ -1645,11 +1790,16 @@ install_monitor_launchdaemon() {
     return 0
   fi
 
-  local unleash_src
-  if [ -n "$SCRIPT_DIR" ]; then
-    unleash_src="$SCRIPT_DIR/unleash"
-  else
-    unleash_src="$(cd "$(dirname "$0")" && pwd)/unleash"
+  # SCRIPT_PATH is the file that is actually running (unleash, or
+  # unleash-standalone.sh when the inlined build is in use).
+  local unleash_src="${SCRIPT_PATH:-}"
+  if [ -z "$unleash_src" ]; then
+    local _src="$0" _dir
+    _dir="${_src%/*}"
+    if [ "$_dir" = "$_src" ]; then
+      _dir="."
+    fi
+    unleash_src="$(cd "$_dir" && pwd)/${_src##*/}"
   fi
 
   step "Installing monitor LaunchDaemon..."
@@ -1779,9 +1929,7 @@ monitor_mdm() {
       now=$(date +%s)
       if [ "$state" = "dirty" ] && [ $((now - last_notification)) -gt 3600 ]; then
         last_notification=$now
-        if command -v osascript &>/dev/null; then
-          osascript -e "display notification \"$reason\" with title \"Unleash MDM Alert\" subtitle \"MDM enrollment detected\"" 2>/dev/null || true
-        fi
+        notify_user "Unleash MDM Alert" "$reason"
         if [ -n "$webhook" ]; then
           local payload
           payload=$(printf '{"content":"🚨 **Unleash Alert** — MDM enrollment detected: %s","username":"Unleash Monitor"}' "$reason")
@@ -1799,9 +1947,7 @@ monitor_mdm() {
 
     if [ "$consecutive_failures" -ge 12 ]; then
       echo "$(date) CRITICAL: 12 consecutive dirty checks" >> "$logfile"
-      if command -v osascript &>/dev/null; then
-        osascript -e "display dialog \"MDM keeps coming back after 12 attempts. Something is persistently re-enrolling.\" with title \"Unleash\" buttons {\"OK\"} default button \"OK\"" 2>/dev/null || true
-      fi
+      notify_user "Unleash" "MDM keeps coming back after 12 attempts. Something is persistently re-enrolling."
       if [ -n "$webhook" ]; then
         curl -s -H "Content-Type: application/json" \
           -d '{"content":"🚨 **Unleash CRITICAL** — 12 consecutive MDM detections. Persistent re-enrollment detected.","username":"Unleash Monitor"}' \
@@ -1852,7 +1998,7 @@ show_history() {
     if [ -f "$logfile" ] && [ -s "$logfile" ]; then
       found=true
       local name
-      name=$(basename "$logfile")
+      name=${logfile##*/}
       step "$name"
       while IFS= read -r line; do
         echo "  $line"
@@ -1867,7 +2013,9 @@ show_history() {
   fi
 
   step "Backup records"
-  local backup_dir=".unleash-backup"
+  # Same path backup_state writes to; a relative "./.unleash-backup" only
+  # existed if the current directory happened to be the install directory.
+  local backup_dir="$BACKUP_DIR"
   if [ -d "$backup_dir" ] && [ -f "$backup_dir/timestamp" ]; then
     local ts
     ts=$(cat "$backup_dir/timestamp")
@@ -1907,8 +2055,17 @@ run_doctor() {
       lib_missing=$((lib_missing + 1))
     fi
   done
-  if [ -z "${LIB_DIR:-}" ] || [ ! -d "${LIB_DIR:-}" ]; then
-    end_ok; echo "     $lib_count modules inlined (standalone build)"
+  if [ "$lib_count" -eq 0 ]; then
+    end_fail; echo "     Module list not loaded"; errors=$((errors + 1))
+  elif [ ! -d "${LIB_DIR:-}" ]; then
+    # The standalone build inlines the modules: no lib/ directory, but the
+    # functions are present.
+    if type suppress_enrollment >/dev/null 2>&1 && type run_doctor >/dev/null 2>&1; then
+      end_ok; echo "     $lib_count modules inlined (standalone build)"
+    else
+      end_fail; echo "     $lib_count module(s) missing (no library directory at ${LIB_DIR:-unset})"
+      errors=$((errors + 1))
+    fi
   elif [ "$lib_missing" -eq 0 ]; then
     end_ok; echo "     $lib_count/$lib_count modules loaded"
   else
@@ -1968,13 +2125,6 @@ run_doctor() {
     end_ok
   else
     end_fail; echo "     Persistence commands unavailable"
-  fi
-
-  begin "dirname available"
-  if command -v dirname >/dev/null 2>&1; then
-    end_ok; echo "     Not required by unleash"
-  else
-    end_ok; echo "     Absent — unleash does not use it"
   fi
 
   begin "Third-party firewall"
@@ -2184,12 +2334,8 @@ do_uninstall() {
   begin "Cleaning hosts entries"
   local hosts="/private/etc/hosts"
   if [ -f "$hosts" ]; then
-    sed -i '' '/# Added by unleash/d' "$hosts" 2>/dev/null || true
-    local domains=("iprofiles.apple.com" "deviceenrollment.apple.com" "mdmenrollment.apple.com")
-    for d in "${domains[@]}"; do
-      sed -i '' "/[[:space:]]$d/d" "$hosts" 2>/dev/null || true
-      sed -i '' "/::$d/d" "$hosts" 2>/dev/null || true
-    done
+    # Removes every domain the tool added, not just the first three.
+    strip_hosts_block "$hosts"
     end_ok
   else
     end_fail; echo "     Not found"
@@ -2208,17 +2354,20 @@ do_uninstall() {
   fi
 
   begin "Removing backup directory"
-  local backup=".unleash-backup"
-  if [ -d "$backup" ]; then
-    rm -rf "$backup" 2>/dev/null || true
+  if [ -d "$BACKUP_DIR" ]; then
+    rm -rf "$BACKUP_DIR" 2>/dev/null || true
     end_ok
   else
     end_fail; echo "     Not found"
   fi
 
   begin "Removing config file"
-  if [ -f "$HOME/.unleash.conf" ]; then
-    rm -f "$HOME/.unleash.conf"
+  # The invoking user's home, not root's: the tool is normally run with sudo,
+  # where $HOME is /var/root and the real config was never touched.
+  local cfgfile
+  cfgfile="$(unleash_user_home)/.unleash.conf"
+  if [ -f "$cfgfile" ]; then
+    rm -f "$cfgfile"
     end_ok
   else
     end_fail; echo "     Not found"
@@ -2272,10 +2421,11 @@ generate_report() {
   step "Installed Profiles"
   if command -v profiles &>/dev/null; then
     local count
-    count=$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)
+    count=$(sudo profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+    count="${count:-0}"
     if [ "$count" -gt 0 ]; then
       echo "  $count profile(s) installed"
-      sudo profiles -C -output=xml 2>/dev/null | grep -A1 "ProfileDisplayName" | grep "<string>" \
+      sudo profiles -C -output stdout-xml 2>/dev/null | grep -A1 "ProfileDisplayName" | grep "<string>" \
         | sed 's/.*<string>\(.*\)<\/string>.*/    - \1/'
     else
       echo "  No profiles installed"
@@ -2311,7 +2461,7 @@ generate_report() {
   step "Recent Events"
   for logfile in /var/log/unleash-monitor.log /var/log/unleash-heal.log; do
     if [ -f "$logfile" ] && [ -s "$logfile" ]; then
-      echo "  From $(basename "$logfile"):"
+      echo "  From ${logfile##*/}:"
       tail -3 "$logfile" | sed 's/^/    /'
     fi
   done
@@ -2320,7 +2470,8 @@ generate_report() {
   step "Hosts Block"
   if grep -q "iprofiles.apple.com" /private/etc/hosts 2>/dev/null; then
     local blocked
-    blocked=$(grep -c "0.0.0.0" /private/etc/hosts 2>/dev/null || echo 0)
+    blocked=$(grep -c "0.0.0.0" /private/etc/hosts 2>/dev/null || true)
+    blocked="${blocked:-0}"
     echo "  $blocked domain(s) blocked in /etc/hosts"
   else
     echo "  No block entries found"
@@ -2348,6 +2499,7 @@ generate_report_json() {
   if command -v profiles &>/dev/null; then
     enroll_state=$(sudo profiles status -type enrollment 2>/dev/null | head -1 | xargs || echo "unknown")
   fi
+  enroll_state="${enroll_state:-unknown}"
   enroll_state="${enroll_state//\"/\\\"}"
   report="${report}  \"enrollment_state\": \"${enroll_state}\",\n"
 
@@ -2359,7 +2511,8 @@ generate_report_json() {
 
   local profile_count=0
   if command -v profiles &>/dev/null; then
-    profile_count=$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)
+    profile_count=$(sudo profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+    profile_count="${profile_count:-0}"
   fi
   report="${report}  \"installed_profiles\": $profile_count,\n"
 
@@ -2389,7 +2542,8 @@ generate_report_json() {
   report="${report}  },\n"
 
   local hosts_blocked=0
-  hosts_blocked=$(grep -c "0.0.0.0" /private/etc/hosts 2>/dev/null || echo 0)
+  hosts_blocked=$(grep -c "0.0.0.0" /private/etc/hosts 2>/dev/null || true)
+  hosts_blocked="${hosts_blocked:-0}"
   report="${report}  \"hosts_blocked\": $hosts_blocked\n"
 
   report="${report}}"
@@ -2415,7 +2569,7 @@ detect_configurator_enrollment() {
   local indicators=0
 
   # Configurator enrollment flag
-  if [ -f "$sys_dir/ConfigurationProflements/Setup/.configuratorEnrollment" ]; then
+  if [ -f "$sys_dir/ConfigurationProfiles/Setup/.configuratorEnrollment" ]; then
     echo -e "${YEL}⚠ Apple Configurator enrollment detected${NC}"
     indicators=$((indicators + 1))
   fi
@@ -2424,13 +2578,13 @@ detect_configurator_enrollment() {
   for f in "$sys_dir"/ConfigurationProfiles/Settings/.cloudConfig*; do
     [ -f "$f" ] || continue
     local name
-    name=$(basename "$f")
+    name=${f##*/}
     echo -e "${YEL}  DEP marker present: $name${NC}"
     indicators=$((indicators + 1))
   done
 
   # Enrollment challenge tokens
-  local challenge_dir="$sys_dir/ConfigurationProflements/Setup"
+  local challenge_dir="$sys_dir/ConfigurationProfiles/Setup"
   if [ -f "$challenge_dir/.configuratorEnrollment" ]; then
     echo -e "${YEL}  Configurator challenge present${NC}"
     indicators=$((indicators + 1))
@@ -2473,8 +2627,11 @@ detect_migration_assistant() {
 
   for home in "${homes[@]}"; do
     local user
-    user=$(basename "$home")
-    [ "$user" = "Guest" ] || [ "$user" = "Shared" ] && continue
+    user=${home%/}
+    user=${user##*/}
+    case "$user" in
+      Guest|Shared) continue ;;
+    esac
     [ -d "$home/Library" ] || continue
 
     local user_agents="$home/Library/LaunchAgents"
@@ -2554,8 +2711,11 @@ clean_ma_artifacts() {
   fi
   for home in "${homes[@]}"; do
     local user
-    user=$(basename "$home")
-    [ "$user" = "Guest" ] || [ "$user" = "Shared" ] && continue
+    user=${home%/}
+    user=${user##*/}
+    case "$user" in
+      Guest|Shared) continue ;;
+    esac
     [ -d "$home/Library" ] || continue
     rm -f "$home/Library/Preferences/com.apple.mdm.plist" 2>/dev/null || true
     rm -f "$home/Library/Preferences/com.apple.mdmclient.plist" 2>/dev/null || true
@@ -3048,39 +3208,46 @@ cmd_remediate() {
 }
 
 
-TELEMETRY_FILE="$HOME/.unleash-telemetry"
+TELEMETRY_FILE="$(unleash_user_home)/.unleash-telemetry"
 
 telemetry_opt_in() {
-  local val="${1:-}"
-  if [ "$val" = "yes" ] || [ "$val" = "true" ] || [ "$val" = "1" ]; then
-    echo "enabled" > "$TELEMETRY_FILE"
-    success "Telemetry enabled"
-  elif [ "$val" = "no" ] || [ "$val" = "false" ] || [ "$val" = "0" ]; then
-    rm -f "$TELEMETRY_FILE"
-    success "Telemetry disabled"
-  else
-    local current="disabled"
-    [ -f "$TELEMETRY_FILE" ] && current="enabled"
-    info "Telemetry: $current"
-    info "Usage: sudo ./unleash telemetry on|off"
-  fi
+	local val="${1:-}"
+	case "$val" in
+		on|yes|true|1)
+			printf 'enabled\n' > "$TELEMETRY_FILE"
+			success "Telemetry enabled"
+			;;
+		off|no|false|0)
+			rm -f "$TELEMETRY_FILE"
+			success "Telemetry disabled"
+			;;
+		*)
+			local current="disabled"
+			[ -f "$TELEMETRY_FILE" ] && current="enabled"
+			info "Telemetry: $current"
+			info "Usage: ./unleash telemetry on|off"
+			info "No events are sent in this release; the flag only records your choice."
+			;;
+	esac
 }
 
 telemetry_is_enabled() {
-  [ -f "$TELEMETRY_FILE" ] && return 0
-  return 1
+	[ -f "$TELEMETRY_FILE" ] && return 0
+	return 1
 }
 
+# Reserved for a future release; nothing calls it yet, so no data leaves the
+# machine today.
 telemetry_send() {
-  telemetry_is_enabled || return 0
-  local event="$1"
-  local data="${2:-{}}"
-  local url="https://unleash-telemetry.mateussiqueira.workers.dev/event"
-  local payload
-  payload=$(printf '{"event":"%s","version":"%s","arch":"%s","os":"%s","data":%s}' \
-    "$event" "$VERSION" "$(uname -m)" "$(uname -s)" "$data")
-  curl -s -o /dev/null -w "" -H "Content-Type: application/json" \
-    -d "$payload" "$url" 2>/dev/null || true
+	telemetry_is_enabled || return 0
+	local event="$1"
+	local data="${2:-{\}}"
+	local url="https://unleash-telemetry.mateussiqueira.workers.dev/event"
+	local payload
+	payload=$(printf '{"event":"%s","version":"%s","arch":"%s","os":"%s","data":%s}' \
+		"$event" "$VERSION" "$(uname -m)" "$(uname -s)" "$data")
+	curl -s -o /dev/null -H "Content-Type: application/json" \
+		-d "$payload" "$url" 2>/dev/null || true
 }
 
 
@@ -3088,13 +3255,14 @@ cmd_predict() {
   header "unleash predict — Serial Number Lookup"
 
   local serial=""
-  serial=$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | grep -i "IOPlatformSerialNumber" | awk -F'"' '{print $4}' || echo "")
+  serial=$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | grep -i "IOPlatformSerialNumber" | awk -F'"' '{print $4}' || true)
+  serial="${serial:-}"
 
   if [ -z "$serial" ]; then
     serial="${1:-}"
   fi
   if [ -z "$serial" ]; then
-    read -p "Enter serial number (or press Enter to skip): " serial
+    read -r -p "Enter serial number (or press Enter to skip): " serial || serial=""
   fi
   if [ -z "$serial" ]; then
     info "No serial provided. Run: ./unleash predict <serial>"
@@ -3104,12 +3272,14 @@ cmd_predict() {
   step "Looking up: $serial"
 
   local serial_prefix
-  serial_prefix=$(echo "$serial" | head -c 4)
-
+  serial_prefix=$(printf '%s' "$serial" | cut -c1-4)
   info "Serial prefix: $serial_prefix"
 
+  # The list must stay a plain heredoc: the terminator has to be alone on its
+  # line, otherwise bash reports "here-document delimited by end-of-file" on
+  # every run.
   local known_orgs
-  known_orgs=$(cat << 'ORGS'
+  known_orgs=$(cat <<'ORGS'
 F5G:Apple Internal
 C0D:JAMF Managed
 C7G:JAMF Managed
@@ -3118,23 +3288,24 @@ H4C:School District Managed
 VMW:VMware Workspace ONE
 M5K:Addigy Managed
 W4P:Kandji Managed
-ORGS)
+ORGS
+)
 
   local match
-  match=$(echo "$known_orgs" | grep "^$serial_prefix:" || true)
+  match=$(printf '%s\n' "$known_orgs" | grep "^$serial_prefix:" || true)
 
   if [ -n "$match" ]; then
     local org_name
-    org_name=$(echo "$match" | cut -d: -f2)
+    org_name=$(printf '%s' "$match" | cut -d: -f2)
     echo -e "${YEL}⚠ Predicted enrollment: $org_name${NC}"
     info "This serial prefix is commonly associated with $org_name-managed devices."
+    info "Serial prefixes are not an authoritative source — confirm with the org first."
     info "Remediation: sudo ./unleash remediate"
   else
     info "No known association for this serial prefix."
     info "The device may be from a smaller org or not organizationally enrolled."
   fi
 
-  local check_url="https://billing.c.apple.com/check?sn=${serial}"
   info "For definitive ownership: https://checkcoverage.apple.com"
 }
 

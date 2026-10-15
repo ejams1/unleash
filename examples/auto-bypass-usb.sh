@@ -7,7 +7,13 @@
 #   chmod +x "/Volumes/YourSSD/auto-bypass-usb.sh"
 #   "/Volumes/YourSSD/auto-bypass-usb.sh"
 
-UNLEASH_DIR="$(cd "$(dirname "$0")" && pwd)"
+# No dirname: the Recovery environment is not guaranteed to ship it.
+_src="${BASH_SOURCE[0]:-$0}"
+_dir="${_src%/*}"
+if [ "$_dir" = "$_src" ]; then
+  _dir="."
+fi
+UNLEASH_DIR="$(cd "$_dir" && pwd)"
 UNLEASH="$UNLEASH_DIR/unleash"
 
 if [ ! -f "$UNLEASH" ]; then

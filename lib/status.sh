@@ -159,7 +159,9 @@ deep_status() {
 		local user_agents
 		user_agents=$(ls "$home/Library/LaunchAgents/" 2>/dev/null | grep -iE "mdm|enrollment|managed" || true)
 		if [ -n "$user_agents" ]; then
-			echo -e "  ${YEL}$(basename "$home"):${NC}"
+			local who="${home%/}"
+			who="${who##*/}"
+			echo -e "  ${YEL}${who}:${NC}"
 			echo "$user_agents" | sed 's/^/    /'
 			found=$((found + 1))
 		fi

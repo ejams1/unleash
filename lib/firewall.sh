@@ -49,7 +49,11 @@ ANCHOR
 
 	local pf_conf="${root}${FIREWALL_CONF}"
 	local anchor_line="anchor \"${FIREWALL_ANCHOR}\""
-	local load_line="load anchor \"${FIREWALL_ANCHOR}\" from \"${anchor_file}\""
+	# pf resolves this path at boot, when the Recovery mount is gone: using the
+	# mount-prefixed path left pf unable to load the anchor (and to load
+	# pf.conf at all) after the reboot.
+	local anchor_boot_path="${FIREWALL_ANCHOR_DIR}/${FIREWALL_ANCHOR}"
+	local load_line="load anchor \"${FIREWALL_ANCHOR}\" from \"${anchor_boot_path}\""
 
 	if [ -f "$pf_conf" ]; then
 		if grep -q "com.unleash" "$pf_conf" 2>/dev/null; then

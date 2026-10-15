@@ -76,11 +76,17 @@ install_persist_launchdaemon() {
 		return 0
 	fi
 
-	local unleash_src
-	if [ -n "$SCRIPT_DIR" ]; then
-		unleash_src="$SCRIPT_DIR/unleash"
-	else
-		unleash_src="$(cd "$(dirname "$0")" && pwd)/unleash"
+	# SCRIPT_PATH is the file that is actually running (unleash, or
+	# unleash-standalone.sh when the inlined build is in use), so the
+	# LaunchDaemon points at a file that exists.
+	local unleash_src="${SCRIPT_PATH:-}"
+	if [ -z "$unleash_src" ]; then
+		local _src="$0" _dir
+		_dir="${_src%/*}"
+		if [ "$_dir" = "$_src" ]; then
+			_dir="."
+		fi
+		unleash_src="$(cd "$_dir" && pwd)/${_src##*/}"
 	fi
 
 	step "Installing LaunchDaemon for boot-time persistence..."

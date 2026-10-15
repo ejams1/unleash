@@ -18,8 +18,17 @@ run_doctor() {
       lib_missing=$((lib_missing + 1))
     fi
   done
-  if [ -z "${LIB_DIR:-}" ] || [ ! -d "${LIB_DIR:-}" ]; then
-    end_ok; echo "     $lib_count modules inlined (standalone build)"
+  if [ "$lib_count" -eq 0 ]; then
+    end_fail; echo "     Module list not loaded"; errors=$((errors + 1))
+  elif [ ! -d "${LIB_DIR:-}" ]; then
+    # The standalone build inlines the modules: no lib/ directory, but the
+    # functions are present.
+    if type suppress_enrollment >/dev/null 2>&1 && type run_doctor >/dev/null 2>&1; then
+      end_ok; echo "     $lib_count modules inlined (standalone build)"
+    else
+      end_fail; echo "     $lib_count module(s) missing (no library directory at ${LIB_DIR:-unset})"
+      errors=$((errors + 1))
+    fi
   elif [ "$lib_missing" -eq 0 ]; then
     end_ok; echo "     $lib_count/$lib_count modules loaded"
   else
@@ -79,13 +88,6 @@ run_doctor() {
     end_ok
   else
     end_fail; echo "     Persistence commands unavailable"
-  fi
-
-  begin "dirname available"
-  if command -v dirname >/dev/null 2>&1; then
-    end_ok; echo "     Not required by unleash"
-  else
-    end_ok; echo "     Absent — unleash does not use it"
   fi
 
   begin "Third-party firewall"

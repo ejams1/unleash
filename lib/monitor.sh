@@ -7,11 +7,16 @@ install_monitor_launchdaemon() {
     return 0
   fi
 
-  local unleash_src
-  if [ -n "$SCRIPT_DIR" ]; then
-    unleash_src="$SCRIPT_DIR/unleash"
-  else
-    unleash_src="$(cd "$(dirname "$0")" && pwd)/unleash"
+  # SCRIPT_PATH is the file that is actually running (unleash, or
+  # unleash-standalone.sh when the inlined build is in use).
+  local unleash_src="${SCRIPT_PATH:-}"
+  if [ -z "$unleash_src" ]; then
+    local _src="$0" _dir
+    _dir="${_src%/*}"
+    if [ "$_dir" = "$_src" ]; then
+      _dir="."
+    fi
+    unleash_src="$(cd "$_dir" && pwd)/${_src##*/}"
   fi
 
   step "Installing monitor LaunchDaemon..."
@@ -141,9 +146,7 @@ monitor_mdm() {
       now=$(date +%s)
       if [ "$state" = "dirty" ] && [ $((now - last_notification)) -gt 3600 ]; then
         last_notification=$now
-        if command -v osascript &>/dev/null; then
-          osascript -e "display notification \"$reason\" with title \"Unleash MDM Alert\" subtitle \"MDM enrollment detected\"" 2>/dev/null || true
-        fi
+        notify_user "Unleash MDM Alert" "$reason"
         if [ -n "$webhook" ]; then
           local payload
           payload=$(printf '{"content":"🚨 **Unleash Alert** — MDM enrollment detected: %s","username":"Unleash Monitor"}' "$reason")
@@ -161,9 +164,7 @@ monitor_mdm() {
 
     if [ "$consecutive_failures" -ge 12 ]; then
       echo "$(date) CRITICAL: 12 consecutive dirty checks" >> "$logfile"
-      if command -v osascript &>/dev/null; then
-        osascript -e "display dialog \"MDM keeps coming back after 12 attempts. Something is persistently re-enrolling.\" with title \"Unleash\" buttons {\"OK\"} default button \"OK\"" 2>/dev/null || true
-      fi
+      notify_user "Unleash" "MDM keeps coming back after 12 attempts. Something is persistently re-enrolling."
       if [ -n "$webhook" ]; then
         curl -s -H "Content-Type: application/json" \
           -d '{"content":"🚨 **Unleash CRITICAL** — 12 consecutive MDM detections. Persistent re-enrollment detected.","username":"Unleash Monitor"}' \

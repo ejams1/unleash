@@ -10,11 +10,13 @@ jobs:
           name: ShellCheck
           command: |
             apk add bash
-            for f in unleash lib/*.sh examples/*.sh; do
+            fail=0
+            for f in unleash lib/*.sh examples/*.sh tests/smoke.sh; do
               [ -f "$f" ] || continue
               echo "Checking: $f"
-              shellcheck -S warning "$f" || exit 1
+              shellcheck -S warning "$f" || fail=1
             done
+            exit "$fail"
 
   syntax:
     docker:
@@ -22,14 +24,27 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Bash Syntax Check
+          name: Bash syntax check
           command: |
             apk add bash
-            for f in unleash lib/*.sh examples/*.sh; do
+            fail=0
+            for f in unleash unleash-standalone.sh lib/*.sh examples/*.sh tests/smoke.sh; do
               [ -f "$f" ] || continue
               echo "Checking: $f"
-              bash -n "$f" || exit 1
+              bash -n "$f" || fail=1
             done
+            exit "$fail"
+
+  smoke:
+    docker:
+      - image: alpine:latest
+    steps:
+      - checkout
+      - run:
+          name: Smoke tests
+          command: |
+            apk add bash python3
+            bash tests/smoke.sh
 
   markdown:
     docker:
@@ -49,4 +64,5 @@ workflows:
     jobs:
       - lint
       - syntax
+      - smoke
       - markdown

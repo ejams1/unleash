@@ -1,6 +1,37 @@
 
-
 PB=/usr/libexec/PlistBuddy
+
+# Domains blocked in the Data volume's /etc/hosts. Kept in one place: the
+# "N of M blocked" report reads the count from here.
+MDM_DOMAINS=(
+	iprofiles.apple.com
+	deviceenrollment.apple.com
+	mdmenrollment.apple.com
+	acmdm.apple.com
+	axm-adm-mdm.apple.com
+	albert.apple.com
+	gdmf.apple.com
+	ax.init-content.apple.com
+	init-content.apple.com
+	configuration.apple.com
+	xp.apple.com
+	gs.apple.com
+	tb.apple.com
+	vpp.itunes.apple.com
+)
+
+# Remove the hosts entries this tool added (the marker comment and the
+# "0.0.0.0 <domain>" / ":: <domain>" lines) without touching anything else.
+strip_hosts_block() {
+	local hosts="$1"
+	[ -f "$hosts" ] || return 0
+
+	local d
+	for d in "${MDM_DOMAINS[@]}"; do
+		sed -i '' "/[[:space:]]$d\$/d" "$hosts" 2>/dev/null || true
+	done
+	sed -i '' '/# Added by unleash/d' "$hosts" 2>/dev/null || true
+}
 
 suppress_enrollment() {
 	local data_mount="$1"
@@ -8,7 +39,7 @@ suppress_enrollment() {
 	if [ "$DRY_RUN" = true ]; then
 		info "[DRY RUN] Would suppress MDM enrollment on $data_mount"
 		info "[DRY RUN]   - Clear DEP markers in ConfigurationProfiles/Settings"
-		info "[DRY RUN]   - Block 13+ Apple MDM domains in /etc/hosts"
+		info "[DRY RUN]   - Block ${#MDM_DOMAINS[@]} Apple MDM domains in /etc/hosts"
 		info "[DRY RUN]   - Disable 4 enrollment daemons in launchd disabled.plist"
 		info "[DRY RUN]   - Clean MDM artifacts from /Users/*/Library"
 		return 0
@@ -34,28 +65,16 @@ suppress_enrollment() {
 	fi
 
 	step "Blocking enrollment domains (Data volume hosts)..."
-	[ -f "$hosts" ] || { mkdir -p "$(dirname "$hosts")"; touch "$hosts"; }
+	if [ ! -f "$hosts" ]; then
+		mkdir -p "${hosts%/*}"
+		touch "$hosts"
+	fi
 	grep -q "Added by unleash" "$hosts" 2>/dev/null || {
 		echo "" >>"$hosts"
 		echo "# Added by unleash — DEP enrollment block" >>"$hosts"
 	}
 
-	local domains=(
-		iprofiles.apple.com
-		deviceenrollment.apple.com
-		mdmenrollment.apple.com
-		acmdm.apple.com
-		axm-adm-mdm.apple.com
-		albert.apple.com
-		gdmf.apple.com
-		ax.init-content.apple.com
-		init-content.apple.com
-		configuration.apple.com
-		xp.apple.com
-		gs.apple.com
-		tb.apple.com
-		vpp.itunes.apple.com
-	)
+	local domains=("${MDM_DOMAINS[@]}")
 	[ -n "$mdm_host" ] && domains+=("$mdm_host")
 
 	local d
@@ -82,7 +101,8 @@ suppress_enrollment() {
 	for home in "$data_mount/Users/"*/; do
 		[ -d "$home/Library" ] || continue
 		local user
-		user=$(basename "$home")
+		user=${home%/}
+		user=${user##*/}
 		info "Cleaning: $user"
 		rm -rf "$home/Library/Preferences/com.apple.mdm"* 2>/dev/null || true
 		rm -rf "$home/Library/Preferences/com.apple.ManagedClient"* 2>/dev/null || true
@@ -92,14 +112,14 @@ suppress_enrollment() {
 			[ -f "$agent" ] || continue
 			if grep -qi mdm "$agent" 2>/dev/null || grep -qi enrollment "$agent" 2>/dev/null; then
 				rm -f "$agent"
-				info "  removed LaunchAgent: $(basename "$agent")"
+				info "  removed LaunchAgent: ${agent##*/}"
 			fi
 		done
 	done
 	success "User-level MDM artifacts removed"
 
 	step "Disabling enrollment daemons..."
-	mkdir -p "$(dirname "$ldp")"
+	mkdir -p "${ldp%/*}"
 	[ -f "$ldp" ] || printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict/></plist>\n' >"$ldp"
 	for label in \
 		com.apple.ManagedClient.enroll \
@@ -107,7 +127,8 @@ suppress_enrollment() {
 		com.apple.mdmclient.daemon.runatboot \
 		com.apple.activationd; do
 		$PB -c "Add :$label bool true" "$ldp" 2>/dev/null \
-			|| $PB -c "Set :$label true" "$ldp" 2>/dev/null
+			|| $PB -c "Set :$label true" "$ldp" 2>/dev/null \
+			|| warn "Could not disable $label in $ldp"
 		info "disabled $label"
 	done
 	success "Enrollment daemons disabled (4 overrides)"
@@ -147,6 +168,7 @@ full_bypass_mode() {
 	echo ""
 	step "Creating temporary admin account"
 
+	local realName=""
 	prompt_default realName "Full name" "Apple"
 
 	local username
@@ -165,7 +187,7 @@ full_bypass_mode() {
 		fi
 	done
 
-	local passw
+	local passw=""
 	prompt_password passw
 
 	local uid

@@ -3,7 +3,7 @@ is_recovery() {
 	[ -d "/System/Installation" ] && return 0
 
 	local vol
-	vol=$(diskutil info / 2>/dev/null | awk -F': *' '/Volume Name/{print $2}' | xargs)
+	vol=$(diskutil info / 2>/dev/null | awk -F': *' '/Volume Name/{print $2}' | awk '{sub(/[ \t]+$/, ""); print}')
 	case "$vol" in
 		"Recovery"*|"macOS Base"*|"macOS Installer"*) return 0 ;;
 	esac
@@ -92,7 +92,7 @@ detect_system_volume() {
 
 	for vol in /Volumes/*; do
 		if [ -d "$vol/System" ] && [ "$vol" != "$data_mount" ]; then
-			basename "$vol"
+			echo "${vol##*/}"
 			return 0
 		fi
 	done

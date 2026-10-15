@@ -47,12 +47,24 @@ create_admin_user() {
 	dscl -f "$node" localhost -create "/Local/Default/Users/$username" PrimaryGroupID "20" 2>/dev/null
 	dscl -f "$node" localhost -create "/Local/Default/Users/$username" NFSHomeDirectory "/Users/$username" 2>/dev/null
 
+	# An account without GeneratedUID can be missing from the login window on
+	# recent macOS releases, and FileVault grants keyed to it misbehave.
+	if command -v uuidgen >/dev/null 2>&1; then
+		dscl -f "$node" localhost -create "/Local/Default/Users/$username" GeneratedUID "$(uuidgen)" 2>/dev/null
+	else
+		warn "uuidgen not found — '$username' will have no GeneratedUID"
+	fi
+
 	dscl -f "$node" localhost -passwd "/Local/Default/Users/$username" "$password" 2>/dev/null \
 		|| error_exit "Failed to set password"
 	dscl -f "$node" localhost -append "/Local/Default/Groups/admin" GroupMembership "$username" 2>/dev/null \
 		|| error_exit "Failed to grant admin"
 
 	mkdir -p "$data_mount/Users/$username"
+	# mkdir runs as root, so the home directory would be owned by root:wheel
+	# and every login would produce permission errors.
+	chown -R "$uid:20" "$data_mount/Users/$username" 2>/dev/null || true
+	chmod 700 "$data_mount/Users/$username" 2>/dev/null || true
 	success "Admin '$username' created (UID $uid)"
 }
 

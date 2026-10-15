@@ -10,7 +10,13 @@ SSD="${1:-}"
 [ -z "$SSD" ] && { echo "Usage: $0 /Volumes/YourSSD"; exit 1; }
 [ -d "$SSD" ] || { echo "SSD not mounted at $SSD"; exit 1; }
 
-SRC="$(cd "$(dirname "$0")/.." && pwd)"
+# No dirname: the Recovery environment is not guaranteed to ship it.
+_src="${BASH_SOURCE[0]:-$0}"
+_dir="${_src%/*}"
+if [ "$_dir" = "$_src" ]; then
+  _dir="."
+fi
+SRC="$(cd "$_dir/.." && pwd)"
 
 echo "Copying unleash to $SSD..."
 cp -R "$SRC" "$SSD/unleash"

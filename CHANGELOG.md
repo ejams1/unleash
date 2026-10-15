@@ -1,5 +1,47 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Diagnostics no longer land in captured values: every helper that logs while
+  its stdout is read by a caller (`data_mount=$(resolve_data_volume)`) returned
+  the log lines instead of the value, which broke bypass, suppress, heal,
+  persist, firewall, whitelist, status, backup and restore in Recovery.
+- `audit` no longer aborts with `cfg: unbound variable`, and `audit --json`
+  reaches the JSON code path again.
+- `unleash-standalone.sh` (Homebrew, curl install, release asset) now carries
+  every module: it was missing init, suggest, remediate, predict, telemetry
+  and discord, all of which exited with `command not found`.
+- `doctor` exists: it was documented in the help and the docs but had no
+  dispatch branch.
+- `--log-file` / `--webhook` without a value no longer drop the whole argument
+  list and fall through to the interactive menu.
+- `--dry-run` / `unleash test` really does simulate: the previous build wrote
+  pf anchors, LaunchDaemons and hosts entries while claiming not to.
+- `vpn-kill --interface utunX` no longer reads the flag as the interface name,
+  and its pf anchor blocks before the VPN pass rule, which made the
+  "VPN only" claim false.
+- `config set KEY value` accepts a value containing `/` (a webhook URL used to
+  kill the script through the sed replacement).
+- Serial-prefix lookup no longer prints a here-document warning on every run.
+- Migration Assistant / Configurator detection reads the right directory name.
+- Cluster of smaller fixes: `profiles -C -output stdout-xml` instead of
+  `-output xml` (which writes files into the CWD), "0\n0" counts that broke
+  `[ -gt ]` tests and produced invalid JSON in `report --json`, the relative
+  `.unleash-backup` path used by `history`/`uninstall`, telemetry accepting
+  `on`/`off` as documented, the pf anchors writing the boot-time path instead
+  of the Recovery mount path, and `dscl` accounts gaining GeneratedUID plus a
+  home directory owned by the new user.
+
+### Added
+- `tests/smoke.sh`: portable end-to-end checks (no bats, no macOS) covering
+  command dispatch, the standalone artifact, captured-value hygiene, dry run,
+  argument parsing and JSON output, wired into both CI configs.
+- Portability guard rail: the scripts may not use `dirname`, `basename`,
+  `readlink` or `realpath`, and `make compat` / CI enforce it. Every use is
+  replaced with parameter expansion, so the tool now runs in a minimal
+  Recovery environment where those binaries are absent.
+
 ## [2.0.0] — 2026-06-20
 
 ### Added

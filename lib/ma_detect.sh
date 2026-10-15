@@ -16,7 +16,7 @@ detect_configurator_enrollment() {
   local indicators=0
 
   # Configurator enrollment flag
-  if [ -f "$sys_dir/ConfigurationProflements/Setup/.configuratorEnrollment" ]; then
+  if [ -f "$sys_dir/ConfigurationProfiles/Setup/.configuratorEnrollment" ]; then
     echo -e "${YEL}⚠ Apple Configurator enrollment detected${NC}"
     indicators=$((indicators + 1))
   fi
@@ -25,13 +25,13 @@ detect_configurator_enrollment() {
   for f in "$sys_dir"/ConfigurationProfiles/Settings/.cloudConfig*; do
     [ -f "$f" ] || continue
     local name
-    name=$(basename "$f")
+    name=${f##*/}
     echo -e "${YEL}  DEP marker present: $name${NC}"
     indicators=$((indicators + 1))
   done
 
   # Enrollment challenge tokens
-  local challenge_dir="$sys_dir/ConfigurationProflements/Setup"
+  local challenge_dir="$sys_dir/ConfigurationProfiles/Setup"
   if [ -f "$challenge_dir/.configuratorEnrollment" ]; then
     echo -e "${YEL}  Configurator challenge present${NC}"
     indicators=$((indicators + 1))
@@ -74,8 +74,11 @@ detect_migration_assistant() {
 
   for home in "${homes[@]}"; do
     local user
-    user=$(basename "$home")
-    [ "$user" = "Guest" ] || [ "$user" = "Shared" ] && continue
+    user=${home%/}
+    user=${user##*/}
+    case "$user" in
+      Guest|Shared) continue ;;
+    esac
     [ -d "$home/Library" ] || continue
 
     local user_agents="$home/Library/LaunchAgents"
@@ -155,8 +158,11 @@ clean_ma_artifacts() {
   fi
   for home in "${homes[@]}"; do
     local user
-    user=$(basename "$home")
-    [ "$user" = "Guest" ] || [ "$user" = "Shared" ] && continue
+    user=${home%/}
+    user=${user##*/}
+    case "$user" in
+      Guest|Shared) continue ;;
+    esac
     [ -d "$home/Library" ] || continue
     rm -f "$home/Library/Preferences/com.apple.mdm.plist" 2>/dev/null || true
     rm -f "$home/Library/Preferences/com.apple.mdmclient.plist" 2>/dev/null || true
