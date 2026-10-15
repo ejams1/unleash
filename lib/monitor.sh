@@ -3,6 +3,10 @@ install_monitor_launchdaemon() {
   local root=""
   [ -n "$data_mount" ] && root="$data_mount"
 
+  if skip_if_dry_run "install the monitor LaunchDaemon in ${root}/Library/LaunchDaemons"; then
+    return 0
+  fi
+
   local unleash_src
   if [ -n "$SCRIPT_DIR" ]; then
     unleash_src="$SCRIPT_DIR/unleash"
@@ -58,6 +62,10 @@ uninstall_monitor_launchdaemon() {
   local root=""
   [ -n "$data_mount" ] && root="$data_mount"
   local plist_path="${root}/Library/LaunchDaemons/com.unleash.monitor.plist"
+
+  if skip_if_dry_run "remove $plist_path"; then
+    return 0
+  fi
 
   if [ -f "$plist_path" ]; then
     step "Removing monitor LaunchDaemon..."

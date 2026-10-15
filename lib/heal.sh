@@ -51,6 +51,9 @@ heal_suppress() {
 	fi
 
 	step "Re-applying MDM suppression..."
+	if skip_if_dry_run "re-apply MDM suppression on $data_mount"; then
+		return 0
+	fi
 	suppress_enrollment "$data_mount"
 	success "MDM suppression restored"
 }
@@ -68,6 +71,10 @@ install_persist_launchdaemon() {
 	local data_mount="$1"
 	local root
 	root="$(_persist_mount_root "$data_mount")"
+
+	if skip_if_dry_run "install the auto-heal LaunchDaemon in ${root}/Library/LaunchDaemons"; then
+		return 0
+	fi
 
 	local unleash_src
 	if [ -n "$SCRIPT_DIR" ]; then
@@ -130,6 +137,10 @@ remove_persist_launchdaemon() {
 	local root
 	root="$(_persist_mount_root "$data_mount")"
 	local plist_path="${root}/Library/LaunchDaemons/com.unleash.heal.plist"
+
+	if skip_if_dry_run "remove $plist_path"; then
+		return 0
+	fi
 
 	if [ -f "$plist_path" ]; then
 		step "Removing Unleash LaunchDaemon..."

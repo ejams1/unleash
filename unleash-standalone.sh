@@ -282,7 +282,7 @@ resolve_data_volume() {
 		warn "Auto-detection failed. Available disks:"
 		diskutil list >&2
 		echo ""
-		read -p "Enter Data volume identifier (e.g. disk3s1): " id </dev/tty
+		read -p "Enter Data volume identifier (e.g. disk3s1): " id </dev/tty || id=""
 		id="${id#/dev/}"
 	fi
 
@@ -299,22 +299,38 @@ resolve_data_volume() {
 	mount_pt=$(_mount_point)
 
 	if [ -z "$mount_pt" ] || [ ! -d "$mount_pt" ]; then
-		info "Not mounted — mounting..."
-		diskutil mount "$data_dev" 2>/dev/null || true
-		mount_pt=$(_mount_point)
+		if is_dry_run; then
+			info "[DRY RUN] Would mount $data_dev"
+		else
+			info "Not mounted — mounting..."
+			diskutil mount "$data_dev" 2>/dev/null || true
+			mount_pt=$(_mount_point)
+		fi
 	fi
 
 	if [ -z "$mount_pt" ] || [ ! -d "$mount_pt" ]; then
-		warn "FileVault-locked — need to unlock."
-		echo -e "${YEL}Enter password of a user on this Mac (or FileVault recovery key):${NC}" >&2
-		diskutil apfs unlockVolume "$data_dev" 2>/dev/null \
-			|| error_exit "Failed to unlock. Re-run with valid credentials."
-		mount_pt=$(_mount_point)
+		if is_dry_run; then
+			warn "[DRY RUN] Volume is not mounted — skipping FileVault unlock"
+		else
+			warn "FileVault-locked — need to unlock."
+			echo -e "${YEL}Enter password of a user on this Mac (or FileVault recovery key):${NC}" >&2
+			diskutil apfs unlockVolume "$data_dev" 2>/dev/null \
+				|| error_exit "Failed to unlock. Re-run with valid credentials."
+			mount_pt=$(_mount_point)
+		fi
+	fi
+
+	# A simulation still needs a path to talk about; nothing is written to it.
+	if is_dry_run && { [ -z "$mount_pt" ] || [ ! -d "$mount_pt" ]; }; then
+		mount_pt="/Volumes/Data"
+		info "[DRY RUN] Volume not mounted — using placeholder $mount_pt"
 	fi
 
 	[ -d "$mount_pt" ] || error_exit "Mount point not found after mount/unlock."
-	[ -d "$mount_pt/private/var/db/dslocal/nodes/Default" ] \
-		|| error_exit "Not a macOS Data volume (no dslocal node at $mount_pt)."
+	if ! is_dry_run; then
+		[ -d "$mount_pt/private/var/db/dslocal/nodes/Default" ] \
+			|| error_exit "Not a macOS Data volume (no dslocal node at $mount_pt)."
+	fi
 
 	success "Data volume: $mount_pt"
 	echo "$mount_pt"
@@ -1066,6 +1082,9 @@ heal_suppress() {
 	fi
 
 	step "Re-applying MDM suppression..."
+	if skip_if_dry_run "re-apply MDM suppression on $data_mount"; then
+		return 0
+	fi
 	suppress_enrollment "$data_mount"
 	success "MDM suppression restored"
 }
@@ -1083,6 +1102,10 @@ install_persist_launchdaemon() {
 	local data_mount="$1"
 	local root
 	root="$(_persist_mount_root "$data_mount")"
+
+	if skip_if_dry_run "install the auto-heal LaunchDaemon in ${root}/Library/LaunchDaemons"; then
+		return 0
+	fi
 
 	local unleash_src
 	if [ -n "$SCRIPT_DIR" ]; then
@@ -1146,6 +1169,10 @@ remove_persist_launchdaemon() {
 	root="$(_persist_mount_root "$data_mount")"
 	local plist_path="${root}/Library/LaunchDaemons/com.unleash.heal.plist"
 
+	if skip_if_dry_run "remove $plist_path"; then
+		return 0
+	fi
+
 	if [ -f "$plist_path" ]; then
 		step "Removing Unleash LaunchDaemon..."
 		if command -v launchctl &>/dev/null; then
@@ -1189,6 +1216,10 @@ install_pf_mdm_block() {
 
 	local anchor_dir="${root}${FIREWALL_ANCHOR_DIR}"
 	local anchor_file="${anchor_dir}/${FIREWALL_ANCHOR}"
+
+	if skip_if_dry_run "write pf anchor ${FIREWALL_ANCHOR} and load it"; then
+		return 0
+	fi
 
 	pf_backup_anchor "$root"
 	mkdir -p "$anchor_dir"
@@ -1256,6 +1287,10 @@ remove_pf_mdm_block() {
 
 	step "Removing Unleash pf anchor..."
 
+	if skip_if_dry_run "remove the pf MDM anchor and flush it"; then
+		return 0
+	fi
+
 	local anchor_file="${root}${FIREWALL_ANCHOR_DIR}/${FIREWALL_ANCHOR}"
 	if [ -f "$anchor_file" ]; then
 		pf_backup_anchor "$root"
@@ -1294,6 +1329,10 @@ pf_status() {
 
 
 harden_live_os() {
+	if skip_if_dry_run "kill MDM processes, remove residual profiles, clean LaunchAgents and flush DNS"; then
+		return 0
+	fi
+
 	step "Killing running MDM processes..."
 	for p in ManagedClient mdmclient activationd; do
 		if pkill -f "$p" 2>/dev/null; then
@@ -1401,6 +1440,10 @@ install_selective_block() {
   [ -n "$data_mount" ] && root="$data_mount"
 
   step "Installing selective pf rules (block MDM only, allow Apple services)..."
+
+  if skip_if_dry_run "resolve the MDM hostnames and install the selective pf block"; then
+    return 0
+  fi
 
   local anchor_dir="${root}/etc/pf.anchors"
   local anchor_file="${anchor_dir}/com.unleash.selective"
@@ -1598,6 +1641,10 @@ install_monitor_launchdaemon() {
   local root=""
   [ -n "$data_mount" ] && root="$data_mount"
 
+  if skip_if_dry_run "install the monitor LaunchDaemon in ${root}/Library/LaunchDaemons"; then
+    return 0
+  fi
+
   local unleash_src
   if [ -n "$SCRIPT_DIR" ]; then
     unleash_src="$SCRIPT_DIR/unleash"
@@ -1653,6 +1700,10 @@ uninstall_monitor_launchdaemon() {
   local root=""
   [ -n "$data_mount" ] && root="$data_mount"
   local plist_path="${root}/Library/LaunchDaemons/com.unleash.monitor.plist"
+
+  if skip_if_dry_run "remove $plist_path"; then
+    return 0
+  fi
 
   if [ -f "$plist_path" ]; then
     step "Removing monitor LaunchDaemon..."
@@ -2012,6 +2063,10 @@ do_self_update() {
     error_exit "curl required for update"
   fi
 
+  if skip_if_dry_run "download the latest release and replace ${SCRIPT_PATH:-$0}"; then
+    return 0
+  fi
+
   local repo="mateussiqueira/unleash"
   local api_url="https://api.github.com/repos/${repo}/releases/latest"
   local tmp_dir
@@ -2082,8 +2137,12 @@ do_self_update() {
 do_uninstall() {
   header "Unleash — Full Uninstall"
 
-  if ! is_root; then
+  if ! is_root && ! is_dry_run; then
     error_exit "Uninstall needs sudo: sudo ./unleash uninstall"
+  fi
+
+  if skip_if_dry_run "remove every unleash LaunchDaemon, pf anchor, hosts entry and backup"; then
+    return 0
   fi
 
   begin "Removing heal LaunchDaemon"
@@ -2593,122 +2652,153 @@ run_demo() {
   echo -e "${CYAN}╚═══════════════════════════════════════════════╝${NC}"
 }
 
+
 VPN_RULES_ANCHOR="com.unleash/vpn-kill"
 VPN_RULES_FILE="/etc/pf.anchors/com.unleash/vpn-kill"
 
+# vpn_kill_install [--interface utunX]
 vpn_kill_install() {
-  header "VPN Kill-Switch — MDM Leak Protection"
+	header "VPN Kill-Switch — MDM Leak Protection"
 
-  if ! is_root; then
-    error_exit "VPN kill-switch needs sudo: sudo ./unleash vpn-kill"
-  fi
+	if ! is_root && ! is_dry_run; then
+		error_exit "VPN kill-switch needs sudo: sudo ./unleash vpn-kill"
+	fi
 
-  local vpn_if=""
+	# Parse --interface/-i explicitly: the flag itself used to be taken as the
+	# interface name because the argument was read positionally.
+	local user_if="" arg
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--interface|-i)
+				[ $# -ge 2 ] || error_exit "$1 requires an interface name (e.g. --interface utun4)"
+				user_if="$2"
+				shift 2
+				;;
+			*) shift ;;
+		esac
+	done
 
-  step "Detecting active VPN interfaces..."
-  local interfaces
-  interfaces=$(ifconfig 2>/dev/null | grep -E "^utun[0-9]+:" | sed 's/:.*//' || true)
-  if [ -z "$interfaces" ]; then
-    warn "No VPN interfaces detected"
-    info "You can specify manually: sudo ./unleash vpn-kill --interface utunX"
-    info "Common VPN interfaces: utun0-9 (WireGuard), utun10+ (OpenVPN), ppp0 (L2TP)"
-  else
-    for iface in $interfaces; do
-      local addr
-      addr=$(ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2}')
-      if [ -n "$addr" ]; then
-        echo "   $iface: $addr"
-        [ -z "$vpn_if" ] && vpn_if="$iface"
-      fi
-    done
-  fi
+	if is_dry_run; then
+		if [ -n "$user_if" ]; then
+			info "[DRY RUN] Would install the VPN kill-switch for $user_if"
+		else
+			info "[DRY RUN] Would detect the VPN interface and install the kill-switch"
+		fi
+		return 0
+	fi
 
-  local user_if="${2:-}"
-  [ -n "$user_if" ] && vpn_if="$user_if"
+	local vpn_if="$user_if"
+	if [ -z "$vpn_if" ]; then
+		step "Detecting active VPN interfaces..."
+		local interfaces iface addr
+		interfaces=$(ifconfig 2>/dev/null | grep -E "^utun[0-9]+:" | sed 's/:.*//' || true)
+		# utun0-3 exist on a stock macOS without any VPN, so take the last
+		# interface that actually has an address and say which one was used.
+		for iface in $interfaces; do
+			addr=$(ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2}')
+			if [ -n "$addr" ]; then
+				echo "   $iface: $addr"
+				vpn_if="$iface"
+			fi
+		done
+		if [ -z "$vpn_if" ]; then
+			warn "No VPN interface with an address found."
+			info "Re-run with an explicit interface: sudo ./unleash vpn-kill --interface utun4"
+			return 1
+		fi
+		info "Using $vpn_if (override with --interface)"
+	fi
 
-  if [ -z "$vpn_if" ]; then
-    warn "No active VPN detected. Installing kill-switch anyway (no default route)."
-    info "Usage: sudo ./unleash vpn-kill --interface utunX"
-    return 1
-  fi
+	if skip_if_dry_run "install the VPN kill-switch for $vpn_if"; then
+		return 0
+	fi
 
-  step "Installing pf rules for VPN kill-switch..."
-  local anchor_dir="/etc/pf.anchors/com.unleash"
-  mkdir -p "$anchor_dir"
+	step "Installing pf rules for VPN kill-switch..."
+	local anchor_dir="/etc/pf.anchors/com.unleash"
+	mkdir -p "$anchor_dir"
 
-  cat > "$VPN_RULES_FILE" << RULES
+	# pf stops at the first matching rule, so the VPN pass has to be written
+	# before the block; with the block first the pass rules never matched and
+	# Apple traffic was dropped on every interface, VPN or not.
+	cat > "$VPN_RULES_FILE" << RULES
 # Unleash VPN kill-switch
-# Only allow MDM traffic through VPN interface $vpn_if
+# Apple MDM ranges are allowed only through $vpn_if.
+# If the tunnel drops, the traffic falls through to the block below.
+pass out on $vpn_if
 block drop out proto {tcp,udp} to {17.0.0.0/8, 17.128.0.0/10}
-pass out proto {tcp,udp} to {17.0.0.0/8, 17.128.0.0/10} no state
-pass on $vpn_if
 RULES
-  chmod 644 "$VPN_RULES_FILE"
-  success "VPN kill-switch rules installed for $vpn_if"
+	chmod 644 "$VPN_RULES_FILE"
+	success "VPN kill-switch rules installed for $vpn_if"
 
-  local pf_conf="/etc/pf.conf"
-  local anchor_line="anchor \"${VPN_RULES_ANCHOR}\""
-  local load_line="load anchor \"${VPN_RULES_ANCHOR}\" from \"${VPN_RULES_FILE}\""
+	local pf_conf="/etc/pf.conf"
+	local anchor_line="anchor \"${VPN_RULES_ANCHOR}\""
+	local load_line="load anchor \"${VPN_RULES_ANCHOR}\" from \"${VPN_RULES_FILE}\""
 
-  if grep -q "vpn-kill" "$pf_conf" 2>/dev/null; then
-    info "pf.conf already has VPN kill-switch anchor"
-  else
-    echo "" >> "$pf_conf"
-    echo "# Added by unleash — VPN kill-switch (prevents MDM leaks)" >> "$pf_conf"
-    echo "$anchor_line" >> "$pf_conf"
-    echo "$load_line" >> "$pf_conf"
-  fi
+	if [ -f "$pf_conf" ]; then
+		if grep -q "vpn-kill" "$pf_conf" 2>/dev/null; then
+			info "pf.conf already has VPN kill-switch anchor"
+		else
+			echo "" >> "$pf_conf"
+			echo "# Added by unleash — VPN kill-switch (prevents MDM leaks)" >> "$pf_conf"
+			echo "$anchor_line" >> "$pf_conf"
+			echo "$load_line" >> "$pf_conf"
+		fi
+	fi
 
-  pfctl -e -f "$pf_conf" 2>/dev/null && success "VPN kill-switch active" \
-    || warn "pfctl failed"
+	pfctl -e -f "$pf_conf" 2>/dev/null && success "VPN kill-switch active" \
+		|| warn "pfctl failed"
 
-  echo ""
-  info "What this does:"
-  info "  - Blocks MDM Apple IP ranges (17.0.0.0/8) on all interfaces"
-  info "  - Only allows MDM traffic through VPN interface ($vpn_if)"
-  info "  - If VPN drops, MDM traffic is blocked — no leaks"
-  echo ""
-  warn "This does NOT affect your regular internet traffic."
-  warn "Only MDM-related IPs are routed through the VPN kill-switch."
+	echo ""
+	info "What this does:"
+	info "  - Allows MDM traffic out through $vpn_if"
+	info "  - Blocks MDM Apple IP ranges (17.0.0.0/8) everywhere else"
+	info "  - If the VPN drops, MDM traffic is blocked — no leaks"
+	echo ""
+	warn "This does NOT affect your regular internet traffic."
+	warn "Only MDM-related IPs are affected by the kill-switch."
 }
 
 vpn_kill_remove() {
-  header "Remove VPN Kill-Switch"
+	header "Remove VPN Kill-Switch"
 
-  if ! is_root; then
-    error_exit "Needs sudo: sudo ./unleash vpn-kill-remove"
-  fi
+	if ! is_root && ! is_dry_run; then
+		error_exit "Needs sudo: sudo ./unleash vpn-kill-remove"
+	fi
 
-  if [ -f "$VPN_RULES_FILE" ]; then
-    rm -f "$VPN_RULES_FILE"
-    success "VPN kill-switch rules removed"
-  fi
+	if skip_if_dry_run "remove the VPN kill-switch"; then
+		return 0
+	fi
 
-  local pf_conf="/etc/pf.conf"
-  if [ -f "$pf_conf" ]; then
-    sed -i '' '/# Added by unleash — VPN kill-switch/d' "$pf_conf" 2>/dev/null || true
-    sed -i '' '/vpn-kill/d' "$pf_conf" 2>/dev/null || true
-    success "pf.conf cleaned"
-  fi
+	if [ -f "$VPN_RULES_FILE" ]; then
+		rm -f "$VPN_RULES_FILE"
+		success "VPN kill-switch rules removed"
+	fi
 
-  pfctl -a "$VPN_RULES_ANCHOR" -F all 2>/dev/null || true
-  success "pf anchor flushed"
+	local pf_conf="/etc/pf.conf"
+	if [ -f "$pf_conf" ]; then
+		sed -i '' '/# Added by unleash — VPN kill-switch/d' "$pf_conf" 2>/dev/null || true
+		sed -i '' '/vpn-kill/d' "$pf_conf" 2>/dev/null || true
+		success "pf.conf cleaned"
+	fi
+
+	pfctl -a "$VPN_RULES_ANCHOR" -F all 2>/dev/null || true
+	success "pf anchor flushed"
 }
 
 vpn_kill_status() {
-  step "VPN kill-switch status"
-  if [ -f "$VPN_RULES_FILE" ]; then
-    echo "  Rules file: $VPN_RULES_FILE"
-    cat "$VPN_RULES_FILE" | sed 's/^/    /'
-  else
-    echo "  No VPN kill-switch installed"
-  fi
-  if command -v pfctl &>/dev/null; then
-    echo ""
-    pfctl -a "$VPN_RULES_ANCHOR" -s rules 2>/dev/null \
-      && echo "  Anchor loaded" \
-      || echo "  Anchor not loaded"
-  fi
+	step "VPN kill-switch status"
+	if [ -f "$VPN_RULES_FILE" ]; then
+		echo "  Rules file: $VPN_RULES_FILE"
+		cat "$VPN_RULES_FILE" | sed 's/^/    /'
+	else
+		echo "  No VPN kill-switch installed"
+	fi
+	if command -v pfctl >/dev/null 2>&1; then
+		echo ""
+		pfctl -a "$VPN_RULES_ANCHOR" -s rules 2>/dev/null \
+			&& echo "  Anchor loaded" \
+			|| echo "  Anchor not loaded"
+	fi
 }
 
 
@@ -2930,6 +3020,10 @@ cmd_remediate() {
 
   step "Applying $org-specific remediation..."
 
+  if skip_if_dry_run "block $org domains, then run harden and heal"; then
+    return 0
+  fi
+
   local extra_domains=""
   extra_domains=$(known_orgs | grep "^$org:" | cut -d: -f3 || true)
 
@@ -3062,6 +3156,10 @@ cmd_discord_bot_install() {
   fi
   if [ -z "$token" ] || [ -z "$channel_id" ]; then
     error_exit "Token and channel ID are required"
+  fi
+
+  if skip_if_dry_run "start the Discord alert bot in $DISCORD_BOT_DIR"; then
+    return 0
   fi
 
   mkdir -p "$DISCORD_BOT_DIR"
@@ -3278,7 +3376,8 @@ cmd_version() {
 }
 
 cmd_bypass() {
-	if is_recovery; then
+	# A simulation does not touch the disk, so it does not need Recovery.
+	if is_recovery || is_dry_run; then
 		header "Full MDM Bypass"
 		local data_mount
 		data_mount=$(resolve_data_volume)
@@ -3367,7 +3466,7 @@ cmd_heal() {
 		data_mount=$(resolve_data_volume)
 		heal_suppress "$data_mount"
 	else
-		if ! is_root; then
+		if ! is_root && ! is_dry_run; then
 			error_exit "Heal needs sudo: sudo ./unleash heal"
 		fi
 		heal_suppress ""
@@ -3379,7 +3478,7 @@ cmd_persist() {
 	if is_recovery; then
 		data_mount=$(resolve_data_volume)
 	else
-		if ! is_root; then
+		if ! is_root && ! is_dry_run; then
 			error_exit "Persistence needs sudo: sudo ./unleash persist"
 		fi
 		data_mount=""
@@ -3398,7 +3497,7 @@ cmd_unpersist() {
 }
 
 cmd_firewall() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Firewall needs sudo: sudo ./unleash firewall"
 	fi
 	if is_recovery; then
@@ -3411,7 +3510,7 @@ cmd_firewall() {
 }
 
 cmd_firewall_off() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Needs sudo: sudo ./unleash firewall-off"
 	fi
 	if is_recovery; then
@@ -3424,7 +3523,7 @@ cmd_firewall_off() {
 }
 
 cmd_harden() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Hardening needs sudo: sudo ./unleash harden"
 	fi
 	if is_recovery; then
@@ -3434,14 +3533,14 @@ cmd_harden() {
 }
 
 cmd_audit() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Audit needs sudo: sudo ./unleash audit"
 	fi
 	deep_status "${1:-}"
 }
 
 cmd_whitelist() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Whitelist needs sudo: sudo ./unleash whitelist"
 	fi
 	if is_recovery; then
@@ -3464,7 +3563,7 @@ cmd_status() {
 }
 
 cmd_check() {
-  if ! is_root; then
+  if ! is_root && ! is_dry_run; then
     error_exit "Check needs sudo: sudo ./unleash check"
   fi
   run_preformat_check
@@ -3511,7 +3610,15 @@ cmd_test() {
     heal)      info "Simulating: heal";     cmd_heal ;;
     harden)    info "Simulating: harden";   cmd_harden ;;
     firewall)  info "Simulating: firewall"; cmd_firewall ;;
+    firewall-off) info "Simulating: firewall-off"; cmd_firewall_off ;;
     whitelist) info "Simulating: whitelist"; cmd_whitelist ;;
+    persist)   info "Simulating: persist";  cmd_persist ;;
+    monitor)   info "Simulating: monitor";  install_monitor_launchdaemon "" ;;
+    uninstall) info "Simulating: uninstall"; do_uninstall ;;
+    update)    info "Simulating: update";   do_self_update ;;
+    vpn-kill)  info "Simulating: vpn-kill"; vpn_kill_install ;;
+    remediate) info "Simulating: remediate"; cmd_remediate ;;
+    backup)    info "Simulating: backup";   backup_state "/" ;;
     all)
       info "Simulating all available operations..."
       info ""
@@ -3519,9 +3626,15 @@ cmd_test() {
       info ""
       DRY_RUN=true full_bypass_mode "/"
       info ""
+      DRY_RUN=true install_pf_mdm_block ""
+      info ""
+      DRY_RUN=true harden_live_os
+      info ""
+      DRY_RUN=true install_persist_launchdaemon ""
+      info ""
       info "Dry-run complete. No changes were made."
       ;;
-    *) info "Usage: ./unleash test {bypass|suppress|heal|harden|firewall|whitelist|all}" ;;
+    *) info "Usage: ./unleash test {bypass|suppress|heal|harden|firewall|whitelist|persist|monitor|uninstall|update|all}" ;;
   esac
 }
 

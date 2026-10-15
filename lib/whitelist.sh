@@ -7,6 +7,10 @@ install_selective_block() {
 
   step "Installing selective pf rules (block MDM only, allow Apple services)..."
 
+  if skip_if_dry_run "resolve the MDM hostnames and install the selective pf block"; then
+    return 0
+  fi
+
   local anchor_dir="${root}/etc/pf.anchors"
   local anchor_file="${anchor_dir}/com.unleash.selective"
   mkdir -p "$anchor_dir"

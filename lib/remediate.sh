@@ -49,6 +49,10 @@ cmd_remediate() {
 
   step "Applying $org-specific remediation..."
 
+  if skip_if_dry_run "block $org domains, then run harden and heal"; then
+    return 0
+  fi
+
   local extra_domains=""
   extra_domains=$(known_orgs | grep "^$org:" | cut -d: -f3 || true)
 

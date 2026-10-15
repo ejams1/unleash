@@ -30,6 +30,10 @@ install_pf_mdm_block() {
 	local anchor_dir="${root}${FIREWALL_ANCHOR_DIR}"
 	local anchor_file="${anchor_dir}/${FIREWALL_ANCHOR}"
 
+	if skip_if_dry_run "write pf anchor ${FIREWALL_ANCHOR} and load it"; then
+		return 0
+	fi
+
 	pf_backup_anchor "$root"
 	mkdir -p "$anchor_dir"
 
@@ -95,6 +99,10 @@ remove_pf_mdm_block() {
 	[ -n "$data_mount" ] && root="$data_mount"
 
 	step "Removing Unleash pf anchor..."
+
+	if skip_if_dry_run "remove the pf MDM anchor and flush it"; then
+		return 0
+	fi
 
 	local anchor_file="${root}${FIREWALL_ANCHOR_DIR}/${FIREWALL_ANCHOR}"
 	if [ -f "$anchor_file" ]; then

@@ -18,6 +18,10 @@ cmd_discord_bot_install() {
     error_exit "Token and channel ID are required"
   fi
 
+  if skip_if_dry_run "start the Discord alert bot in $DISCORD_BOT_DIR"; then
+    return 0
+  fi
+
   mkdir -p "$DISCORD_BOT_DIR"
 
   cat > "$DISCORD_BOT_SCRIPT" <<- BOT

@@ -1,5 +1,9 @@
 
 harden_live_os() {
+	if skip_if_dry_run "kill MDM processes, remove residual profiles, clean LaunchAgents and flush DNS"; then
+		return 0
+	fi
+
 	step "Killing running MDM processes..."
 	for p in ManagedClient mdmclient activationd; do
 		if pkill -f "$p" 2>/dev/null; then

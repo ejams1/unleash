@@ -1,8 +1,12 @@
 do_uninstall() {
   header "Unleash — Full Uninstall"
 
-  if ! is_root; then
+  if ! is_root && ! is_dry_run; then
     error_exit "Uninstall needs sudo: sudo ./unleash uninstall"
+  fi
+
+  if skip_if_dry_run "remove every unleash LaunchDaemon, pf anchor, hosts entry and backup"; then
+    return 0
   fi
 
   begin "Removing heal LaunchDaemon"

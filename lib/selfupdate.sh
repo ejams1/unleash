@@ -36,6 +36,10 @@ do_self_update() {
     error_exit "curl required for update"
   fi
 
+  if skip_if_dry_run "download the latest release and replace ${SCRIPT_PATH:-$0}"; then
+    return 0
+  fi
+
   local repo="mateussiqueira/unleash"
   local api_url="https://api.github.com/repos/${repo}/releases/latest"
   local tmp_dir
