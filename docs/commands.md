@@ -277,6 +277,15 @@ View or edit persistent settings in `~/.unleash.conf`.
 ./unleash config set key value
 ```
 
+Keys:
+
+| Key | Value |
+| --- | --- |
+| `WEBHOOK` | Discord/Slack webhook used by the monitor |
+| `LOG_LEVEL` | `verbose` to include DEBUG lines |
+| `LOG_FILE` | Path every log line is appended to |
+| `HOSTS_SKIP` | Domains the hosts block leaves reachable (comma or space separated), e.g. `gdmf.apple.com,gs.apple.com` for Rosetta and software update |
+
 ### `report`
 Generates a full status report. Supports `--json` for machine-readable output.
 ```bash

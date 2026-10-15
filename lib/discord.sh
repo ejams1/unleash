@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 DISCORD_BOT_DIR="/tmp/unleash-discord"
 DISCORD_BOT_SCRIPT="${DISCORD_BOT_DIR}/bot.sh"
@@ -16,6 +17,10 @@ cmd_discord_bot_install() {
   fi
   if [ -z "$token" ] || [ -z "$channel_id" ]; then
     error_exit "Token and channel ID are required"
+  fi
+
+  if skip_if_dry_run "start the Discord alert bot in $DISCORD_BOT_DIR"; then
+    return 0
   fi
 
   mkdir -p "$DISCORD_BOT_DIR"

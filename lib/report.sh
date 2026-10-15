@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 generate_report() {
   if [ "${1:-}" = "--json" ]; then
     generate_report_json
@@ -30,10 +31,11 @@ generate_report() {
   step "Installed Profiles"
   if command -v profiles &>/dev/null; then
     local count
-    count=$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)
+    count=$(sudo profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+    count="${count:-0}"
     if [ "$count" -gt 0 ]; then
       echo "  $count profile(s) installed"
-      sudo profiles -C -output=xml 2>/dev/null | grep -A1 "ProfileDisplayName" | grep "<string>" \
+      sudo profiles -C -output stdout-xml 2>/dev/null | grep -A1 "ProfileDisplayName" | grep "<string>" \
         | sed 's/.*<string>\(.*\)<\/string>.*/    - \1/'
     else
       echo "  No profiles installed"
@@ -69,7 +71,7 @@ generate_report() {
   step "Recent Events"
   for logfile in /var/log/unleash-monitor.log /var/log/unleash-heal.log; do
     if [ -f "$logfile" ] && [ -s "$logfile" ]; then
-      echo "  From $(basename "$logfile"):"
+      echo "  From ${logfile##*/}:"
       tail -3 "$logfile" | sed 's/^/    /'
     fi
   done
@@ -78,7 +80,8 @@ generate_report() {
   step "Hosts Block"
   if grep -q "iprofiles.apple.com" /private/etc/hosts 2>/dev/null; then
     local blocked
-    blocked=$(grep -c "0.0.0.0" /private/etc/hosts 2>/dev/null || echo 0)
+    blocked=$(grep -c "0.0.0.0" /private/etc/hosts 2>/dev/null || true)
+    blocked="${blocked:-0}"
     echo "  $blocked domain(s) blocked in /etc/hosts"
   else
     echo "  No block entries found"
@@ -106,6 +109,7 @@ generate_report_json() {
   if command -v profiles &>/dev/null; then
     enroll_state=$(sudo profiles status -type enrollment 2>/dev/null | head -1 | xargs || echo "unknown")
   fi
+  enroll_state="${enroll_state:-unknown}"
   enroll_state="${enroll_state//\"/\\\"}"
   report="${report}  \"enrollment_state\": \"${enroll_state}\",\n"
 
@@ -117,7 +121,8 @@ generate_report_json() {
 
   local profile_count=0
   if command -v profiles &>/dev/null; then
-    profile_count=$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)
+    profile_count=$(sudo profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+    profile_count="${profile_count:-0}"
   fi
   report="${report}  \"installed_profiles\": $profile_count,\n"
 
@@ -147,7 +152,8 @@ generate_report_json() {
   report="${report}  },\n"
 
   local hosts_blocked=0
-  hosts_blocked=$(grep -c "0.0.0.0" /private/etc/hosts 2>/dev/null || echo 0)
+  hosts_blocked=$(grep -c "0.0.0.0" /private/etc/hosts 2>/dev/null || true)
+  hosts_blocked="${hosts_blocked:-0}"
   report="${report}  \"hosts_blocked\": $hosts_blocked\n"
 
   report="${report}}"

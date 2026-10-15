@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 show_history() {
   header "Unleash Event History"
 
@@ -8,7 +9,7 @@ show_history() {
     if [ -f "$logfile" ] && [ -s "$logfile" ]; then
       found=true
       local name
-      name=$(basename "$logfile")
+      name=${logfile##*/}
       step "$name"
       while IFS= read -r line; do
         echo "  $line"
@@ -23,7 +24,9 @@ show_history() {
   fi
 
   step "Backup records"
-  local backup_dir=".unleash-backup"
+  # Same path backup_state writes to; a relative "./.unleash-backup" only
+  # existed if the current directory happened to be the install directory.
+  local backup_dir="$BACKUP_DIR"
   if [ -d "$backup_dir" ] && [ -f "$backup_dir/timestamp" ]; then
     local ts
     ts=$(cat "$backup_dir/timestamp")

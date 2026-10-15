@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 heal_suppress() {
 	local data_mount="$1"
@@ -51,6 +52,9 @@ heal_suppress() {
 	fi
 
 	step "Re-applying MDM suppression..."
+	if skip_if_dry_run "re-apply MDM suppression on $data_mount"; then
+		return 0
+	fi
 	suppress_enrollment "$data_mount"
 	success "MDM suppression restored"
 }
@@ -69,11 +73,21 @@ install_persist_launchdaemon() {
 	local root
 	root="$(_persist_mount_root "$data_mount")"
 
-	local unleash_src
-	if [ -n "$SCRIPT_DIR" ]; then
-		unleash_src="$SCRIPT_DIR/unleash"
-	else
-		unleash_src="$(cd "$(dirname "$0")" && pwd)/unleash"
+	if skip_if_dry_run "install the auto-heal LaunchDaemon in ${root}/Library/LaunchDaemons"; then
+		return 0
+	fi
+
+	# SCRIPT_PATH is the file that is actually running (unleash, or
+	# unleash-standalone.sh when the inlined build is in use), so the
+	# LaunchDaemon points at a file that exists.
+	local unleash_src="${SCRIPT_PATH:-}"
+	if [ -z "$unleash_src" ]; then
+		local _src="$0" _dir
+		_dir="${_src%/*}"
+		if [ "$_dir" = "$_src" ]; then
+			_dir="."
+		fi
+		unleash_src="$(cd "$_dir" && pwd)/${_src##*/}"
 	fi
 
 	step "Installing LaunchDaemon for boot-time persistence..."
@@ -130,6 +144,10 @@ remove_persist_launchdaemon() {
 	local root
 	root="$(_persist_mount_root "$data_mount")"
 	local plist_path="${root}/Library/LaunchDaemons/com.unleash.heal.plist"
+
+	if skip_if_dry_run "remove $plist_path"; then
+		return 0
+	fi
 
 	if [ -f "$plist_path" ]; then
 		step "Removing Unleash LaunchDaemon..."

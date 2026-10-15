@@ -1,9 +1,10 @@
+# shellcheck shell=bash
 
 is_recovery() {
 	[ -d "/System/Installation" ] && return 0
 
 	local vol
-	vol=$(diskutil info / 2>/dev/null | awk -F': *' '/Volume Name/{print $2}' | xargs)
+	vol=$(diskutil info / 2>/dev/null | awk -F': *' '/Volume Name/{print $2}' | awk '{sub(/[ \t]+$/, ""); print}')
 	case "$vol" in
 		"Recovery"*|"macOS Base"*|"macOS Installer"*) return 0 ;;
 	esac
@@ -32,7 +33,7 @@ resolve_data_volume() {
 		warn "Auto-detection failed. Available disks:"
 		diskutil list >&2
 		echo ""
-		read -p "Enter Data volume identifier (e.g. disk3s1): " id </dev/tty
+		read -p "Enter Data volume identifier (e.g. disk3s1): " id </dev/tty || id=""
 		id="${id#/dev/}"
 	fi
 
@@ -49,22 +50,38 @@ resolve_data_volume() {
 	mount_pt=$(_mount_point)
 
 	if [ -z "$mount_pt" ] || [ ! -d "$mount_pt" ]; then
-		info "Not mounted — mounting..."
-		diskutil mount "$data_dev" 2>/dev/null || true
-		mount_pt=$(_mount_point)
+		if is_dry_run; then
+			info "[DRY RUN] Would mount $data_dev"
+		else
+			info "Not mounted — mounting..."
+			diskutil mount "$data_dev" 2>/dev/null || true
+			mount_pt=$(_mount_point)
+		fi
 	fi
 
 	if [ -z "$mount_pt" ] || [ ! -d "$mount_pt" ]; then
-		warn "FileVault-locked — need to unlock."
-		echo -e "${YEL}Enter password of a user on this Mac (or FileVault recovery key):${NC}" >&2
-		diskutil apfs unlockVolume "$data_dev" 2>/dev/null \
-			|| error_exit "Failed to unlock. Re-run with valid credentials."
-		mount_pt=$(_mount_point)
+		if is_dry_run; then
+			warn "[DRY RUN] Volume is not mounted — skipping FileVault unlock"
+		else
+			warn "FileVault-locked — need to unlock."
+			echo -e "${YEL}Enter password of a user on this Mac (or FileVault recovery key):${NC}" >&2
+			diskutil apfs unlockVolume "$data_dev" 2>/dev/null \
+				|| error_exit "Failed to unlock. Re-run with valid credentials."
+			mount_pt=$(_mount_point)
+		fi
+	fi
+
+	# A simulation still needs a path to talk about; nothing is written to it.
+	if is_dry_run && { [ -z "$mount_pt" ] || [ ! -d "$mount_pt" ]; }; then
+		mount_pt="/Volumes/Data"
+		info "[DRY RUN] Volume not mounted — using placeholder $mount_pt"
 	fi
 
 	[ -d "$mount_pt" ] || error_exit "Mount point not found after mount/unlock."
-	[ -d "$mount_pt/private/var/db/dslocal/nodes/Default" ] \
-		|| error_exit "Not a macOS Data volume (no dslocal node at $mount_pt)."
+	if ! is_dry_run; then
+		[ -d "$mount_pt/private/var/db/dslocal/nodes/Default" ] \
+			|| error_exit "Not a macOS Data volume (no dslocal node at $mount_pt)."
+	fi
 
 	success "Data volume: $mount_pt"
 	echo "$mount_pt"
@@ -76,7 +93,7 @@ detect_system_volume() {
 
 	for vol in /Volumes/*; do
 		if [ -d "$vol/System" ] && [ "$vol" != "$data_mount" ]; then
-			basename "$vol"
+			echo "${vol##*/}"
 			return 0
 		fi
 	done

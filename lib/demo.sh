@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034  # DRY_RUN is read by suppress_enrollment
 run_demo() {
   header "Unleash Demo — Simulated MDM Bypass"
 

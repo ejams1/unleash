@@ -1,8 +1,13 @@
+# shellcheck shell=bash
 do_uninstall() {
   header "Unleash — Full Uninstall"
 
-  if ! is_root; then
+  if ! is_root && ! is_dry_run; then
     error_exit "Uninstall needs sudo: sudo ./unleash uninstall"
+  fi
+
+  if skip_if_dry_run "remove every unleash LaunchDaemon, pf anchor, hosts entry and backup"; then
+    return 0
   fi
 
   begin "Removing heal LaunchDaemon"
@@ -44,12 +49,8 @@ do_uninstall() {
   begin "Cleaning hosts entries"
   local hosts="/private/etc/hosts"
   if [ -f "$hosts" ]; then
-    sed -i '' '/# Added by unleash/d' "$hosts" 2>/dev/null || true
-    local domains=("iprofiles.apple.com" "deviceenrollment.apple.com" "mdmenrollment.apple.com")
-    for d in "${domains[@]}"; do
-      sed -i '' "/[[:space:]]$d/d" "$hosts" 2>/dev/null || true
-      sed -i '' "/::$d/d" "$hosts" 2>/dev/null || true
-    done
+    # Removes every domain the tool added, not just the first three.
+    strip_hosts_block "$hosts"
     end_ok
   else
     end_fail; echo "     Not found"
@@ -68,17 +69,20 @@ do_uninstall() {
   fi
 
   begin "Removing backup directory"
-  local backup=".unleash-backup"
-  if [ -d "$backup" ]; then
-    rm -rf "$backup" 2>/dev/null || true
+  if [ -d "$BACKUP_DIR" ]; then
+    rm -rf "$BACKUP_DIR" 2>/dev/null || true
     end_ok
   else
     end_fail; echo "     Not found"
   fi
 
   begin "Removing config file"
-  if [ -f "$HOME/.unleash.conf" ]; then
-    rm -f "$HOME/.unleash.conf"
+  # The invoking user's home, not root's: the tool is normally run with sudo,
+  # where $HOME is /var/root and the real config was never touched.
+  local cfgfile
+  cfgfile="$(unleash_user_home)/.unleash.conf"
+  if [ -f "$cfgfile" ]; then
+    rm -f "$cfgfile"
     end_ok
   else
     end_fail; echo "     Not found"

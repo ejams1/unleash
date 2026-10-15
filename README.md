@@ -33,7 +33,7 @@ No internet needed. No SIP to disable. No typing long URLs.
 If you do have internet in Recovery:
 
 ```bash
-curl -L https://raw.githubusercontent.com/mateussiqueira/unleash/main/unleash -o /tmp/unleash
+curl -L https://raw.githubusercontent.com/mateussiqueira/unleash/main/unleash-standalone.sh -o /tmp/unleash
 chmod +x /tmp/unleash && /tmp/unleash bypass
 ```
 
@@ -268,15 +268,27 @@ Unleash blocks via `/etc/hosts`:
 - `acmdm.apple.com` — Apple Configurator MDM
 - `axm-adm-mdm.apple.com` — ACM enrollment
 - `albert.apple.com` — ABM device assignment
-- `gdmf.apple.com` — MDM framework
+- `gdmf.apple.com` — MDM framework (also serves update/Gatekeeper metadata)
 - `configuration.apple.com` — config service
 - `xp.apple.com` — device management
-- `gs.apple.com` — device enrollment
+- `gs.apple.com` — device enrollment (also used by activation and the App Store)
 - `tb.apple.com` — device trust
 - `vpp.itunes.apple.com` — volume purchase
+- `init-content.apple.com`, `ax.init-content.apple.com` — content bootstrap
 - Your org's MDM host (extracted from the DEP record)
 
 Both IPv4 (0.0.0.0) and IPv6 (::) entries are added.
+
+The list is deliberately broad, which means it can also break Apple services
+that share the same hosts. If `softwareupdate --install-rosetta` reports
+"Rosetta 2 update is not available", or updates and App Store sign-in misbehave
+([upstream issue #19](https://github.com/mateussiqueira/unleash/issues/19)),
+leave those hosts reachable while keeping MDM blocked:
+
+```bash
+./unleash config set HOSTS_SKIP "gdmf.apple.com,gs.apple.com"
+sudo ./unleash heal   # re-applies the block; skipped hosts are not added
+```
 
 ### Layer 3: Launchd daemon override
 

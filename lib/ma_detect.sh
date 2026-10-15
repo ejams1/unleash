@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 detect_configurator_enrollment() {
   local data_mount="${1:-}"
 
@@ -16,7 +17,7 @@ detect_configurator_enrollment() {
   local indicators=0
 
   # Configurator enrollment flag
-  if [ -f "$sys_dir/ConfigurationProflements/Setup/.configuratorEnrollment" ]; then
+  if [ -f "$sys_dir/ConfigurationProfiles/Setup/.configuratorEnrollment" ]; then
     echo -e "${YEL}⚠ Apple Configurator enrollment detected${NC}"
     indicators=$((indicators + 1))
   fi
@@ -25,13 +26,13 @@ detect_configurator_enrollment() {
   for f in "$sys_dir"/ConfigurationProfiles/Settings/.cloudConfig*; do
     [ -f "$f" ] || continue
     local name
-    name=$(basename "$f")
+    name=${f##*/}
     echo -e "${YEL}  DEP marker present: $name${NC}"
     indicators=$((indicators + 1))
   done
 
   # Enrollment challenge tokens
-  local challenge_dir="$sys_dir/ConfigurationProflements/Setup"
+  local challenge_dir="$sys_dir/ConfigurationProfiles/Setup"
   if [ -f "$challenge_dir/.configuratorEnrollment" ]; then
     echo -e "${YEL}  Configurator challenge present${NC}"
     indicators=$((indicators + 1))
@@ -74,14 +75,24 @@ detect_migration_assistant() {
 
   for home in "${homes[@]}"; do
     local user
-    user=$(basename "$home")
-    [ "$user" = "Guest" ] || [ "$user" = "Shared" ] && continue
+    user=${home%/}
+    user=${user##*/}
+    case "$user" in
+      Guest|Shared) continue ;;
+    esac
     [ -d "$home/Library" ] || continue
 
     local user_agents="$home/Library/LaunchAgents"
     if [ -d "$user_agents" ]; then
-      local found
-      found=$(ls "$user_agents" 2>/dev/null | grep -ciE "mdm|enrollment|managed" || true)
+      local found=0 _agent _name _lower
+      for _agent in "$user_agents"/*; do
+        [ -f "$_agent" ] || continue
+        _name=${_agent##*/}
+        _lower=$(printf '%s' "$_name" | tr '[:upper:]' '[:lower:]')
+        case "$_lower" in
+          *mdm*|*enrollment*|*managed*) found=$((found + 1)) ;;
+        esac
+      done
       if [ "$found" -gt 0 ]; then
         ma_indicators=$((ma_indicators + found))
         details="$details  $user: $found MDM LaunchAgent(s)\n"
@@ -155,8 +166,11 @@ clean_ma_artifacts() {
   fi
   for home in "${homes[@]}"; do
     local user
-    user=$(basename "$home")
-    [ "$user" = "Guest" ] || [ "$user" = "Shared" ] && continue
+    user=${home%/}
+    user=${user##*/}
+    case "$user" in
+      Guest|Shared) continue ;;
+    esac
     [ -d "$home/Library" ] || continue
     rm -f "$home/Library/Preferences/com.apple.mdm.plist" 2>/dev/null || true
     rm -f "$home/Library/Preferences/com.apple.mdmclient.plist" 2>/dev/null || true

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 run_preformat_check() {
   header "Pre-Format MDM Assessment"
 
@@ -18,13 +19,16 @@ run_preformat_check() {
   step "Checking MDM enrollment URL for this device..."
   if command -v curl &>/dev/null; then
     local enroll_check
+    # curl already prints 000 when it cannot connect; `|| echo "000"` added a
+    # second value and turned the comparison into a string that never matched.
     enroll_check=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-      "https://deviceenrollment.apple.com/" 2>/dev/null || echo "000")
-    if [ "$enroll_check" = "000" ] || [ "$enroll_check" = "200" ]; then
-      echo -e "  ${YEL}deviceenrollment.apple.com reachable${NC}"
-    else
-      echo -e "  ${GRN}deviceenrollment.apple.com blocked (code $enroll_check)${NC}"
-    fi
+      "https://deviceenrollment.apple.com/" 2>/dev/null || true)
+    enroll_check="${enroll_check:-000}"
+    case "$enroll_check" in
+      000) echo -e "  ${YEL}Could not reach deviceenrollment.apple.com (offline, blocked or no DNS)${NC}" ;;
+      200) echo -e "  ${YEL}deviceenrollment.apple.com reachable — enrollment can proceed${NC}" ;;
+      *)   echo -e "  ${GRN}deviceenrollment.apple.com answered $enroll_check${NC}" ;;
+    esac
   else
     echo -e "  ${YEL}curl not available, skipping URL check${NC}"
   fi
@@ -44,7 +48,8 @@ run_preformat_check() {
   step "Checking installed profiles..."
   if command -v profiles &>/dev/null; then
     local profile_count
-    profile_count=$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)
+    profile_count=$(sudo profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+    profile_count="${profile_count:-0}"
     if [ "$profile_count" -gt 0 ]; then
       echo -e "  ${YEL}$profile_count profile(s) installed${NC}"
       clean=false

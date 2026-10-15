@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 GPG_KEY_URL="https://raw.githubusercontent.com/mateussiqueira/unleash/main/.github/unleash.gpg"
 
 import_gpg_key() {
@@ -34,6 +35,10 @@ do_self_update() {
 
   if ! command -v curl &>/dev/null; then
     error_exit "curl required for update"
+  fi
+
+  if skip_if_dry_run "download the latest release and replace ${SCRIPT_PATH:-$0}"; then
+    return 0
   fi
 
   local repo="mateussiqueira/unleash"

@@ -1,21 +1,43 @@
+# shellcheck shell=bash
 
-BACKUP_DIR="$(dirname "$(dirname "$0")")/.unleash-backup"
+# Backup directory sits next to the unleash folder (not inside it), so it
+# travels with the USB stick / checkout it was taken from. Derived from
+# SCRIPT_DIR without dirname (not guaranteed in a minimal shell); history and
+# uninstall read the same variable, so the three can no longer disagree.
+_backup_base="${SCRIPT_DIR:-}"
+_backup_base="${_backup_base%/}"
+case "$_backup_base" in
+	"") _backup_base="." ;;
+	*/*) _backup_base="${_backup_base%/*}" ;;
+	*) _backup_base="." ;;
+esac
+BACKUP_DIR="$_backup_base/.unleash-backup"
+unset _backup_base
 
 check_disk_space() {
 	local data_mount="$1"
 	local needed_kb=10240
 	local available_kb
 	available_kb=$(df -k "$data_mount" 2>/dev/null | tail -1 | awk '{print $4}')
-	if [ -n "$available_kb" ] && [ "$available_kb" -lt "$needed_kb" ]; then
+	if [ -n "$available_kb" ] && [ "$available_kb" -lt "$needed_kb" ] 2>/dev/null; then
 		warn "Low disk space: $(echo "$available_kb" | awk '{printf "%.0f MB", $1/1024}') available"
-		echo -n "Continue anyway? [y/N] "
-		read -r answer
-		[ "$answer" != "y" ] && [ "$answer" != "Y" ] && error_exit "Aborted by user"
+		echo -n "Continue anyway? [y/N] " >&2
+		local answer=""
+		read -r answer || answer=""
+		case "$answer" in
+			y|Y) ;;
+			*) error_exit "Aborted by user" ;;
+		esac
 	fi
 }
 
 backup_state() {
 	local data_mount="$1"
+
+	if skip_if_dry_run "save hosts, DEP markers and launchd state to $BACKUP_DIR"; then
+		return 0
+	fi
+
 	mkdir -p "$BACKUP_DIR"
 	check_disk_space "$data_mount"
 	step "Saving backup to $BACKUP_DIR"
@@ -61,9 +83,16 @@ restore_state() {
 	step "Restoring from backup ($(cat "$BACKUP_DIR/timestamp"))"
 	echo -e "${YEL}Target: $data_mount${NC}"
 
+	local hosts="$data_mount/private/etc/hosts"
+
 	if [ -f "$BACKUP_DIR/hosts.backup" ]; then
-		cp "$BACKUP_DIR/hosts.backup" "$data_mount/private/etc/hosts"
+		cp "$BACKUP_DIR/hosts.backup" "$hosts"
 		success "hosts restored"
+	else
+		# No pristine copy: strip our own entries rather than only the marker
+		# comment, which used to leave every blocked domain behind.
+		strip_hosts_block "$hosts"
+		success "unleash hosts entries removed"
 	fi
 
 	if [ -d "$BACKUP_DIR/ConfigurationProfiles" ]; then
@@ -75,12 +104,10 @@ restore_state() {
 
 	if [ -f "$BACKUP_DIR/launchd/disabled.plist.backup" ]; then
 		local ldp="$data_mount/private/var/db/com.apple.xpc.launchd/disabled.plist"
-		mkdir -p "$(dirname "$ldp")"
+		mkdir -p "${ldp%/*}"
 		cp "$BACKUP_DIR/launchd/disabled.plist.backup" "$ldp"
 		success "launchd override restored"
 	fi
-
-	sed -i '' '/# Added by unleash/d' "$data_mount/private/etc/hosts" 2>/dev/null || true
 
 	rm -f "$BACKUP_DIR/data_volume_path" "$BACKUP_DIR/timestamp"
 	success "Restore complete"

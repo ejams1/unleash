@@ -1,5 +1,10 @@
+# shellcheck shell=bash
 
 harden_live_os() {
+	if skip_if_dry_run "kill MDM processes, remove residual profiles, clean LaunchAgents and flush DNS"; then
+		return 0
+	fi
+
 	step "Killing running MDM processes..."
 	for p in ManagedClient mdmclient activationd; do
 		if pkill -f "$p" 2>/dev/null; then
@@ -12,7 +17,9 @@ harden_live_os() {
 	step "Removing residual MDM profiles..."
 	if command -v profiles &>/dev/null; then
 		local installed
-		installed=$(profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+		# -output xml writes files into the CWD; stdout-xml prints to stdout.
+		installed=$(profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+		installed="${installed:-0}"
 		if [ "$installed" -gt 0 ]; then
 			sudo profiles -D -F 2>/dev/null && success "Forced profile removal" \
 				|| warn "Profile removal failed"
@@ -35,8 +42,13 @@ harden_live_os() {
 				cleaned=$((cleaned + 1))
 			fi
 		done
-		[ "$cleaned" -gt 0 ] && success "$(basename "$home"): removed $cleaned agent(s)" \
-			|| info "$(basename "$home"): clean"
+		local who="${home%/}"
+		who="${who##*/}"
+		if [ "$cleaned" -gt 0 ]; then
+			success "$who: removed $cleaned agent(s)"
+		else
+			info "$who: clean"
+		fi
 	done
 
 	step "Flushing DNS cache..."

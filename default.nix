@@ -2,7 +2,7 @@
 
 pkgs.stdenv.mkDerivation rec {
   pname = "unleash";
-  version = "1.6.1";
+  version = "2.0.0";
 
   src = ./.;
 
@@ -10,7 +10,9 @@ pkgs.stdenv.mkDerivation rec {
     mkdir -p $out/bin
     cp unleash $out/bin/
     chmod +x $out/bin/unleash
-    cp -r lib $out/lib/
+    # The script loads its modules from <script dir>/lib, so the modules ship
+    # next to the binary; $out/lib is never consulted.
+    cp -r lib $out/bin/lib/
     cp -r examples $out/share/unleash/
   '';
 

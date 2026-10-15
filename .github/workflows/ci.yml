@@ -16,25 +16,58 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - name: Run ShellCheck
         run: |
-          for f in unleash lib/*.sh examples/*.sh; do
+          fail=0
+          for f in unleash lib/*.sh examples/*.sh tests/smoke.sh; do
             [ -f "$f" ] || continue
             echo "Checking: $f"
-            shellcheck -S warning "$f" || exit 1
+            shellcheck -S warning "$f" || fail=1
           done
+          exit "$fail"
 
   syntax:
-    name: Bash Syntax Check
+    name: Bash syntax check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Check syntax
         run: |
-          for f in unleash lib/*.sh examples/*.sh; do
+          fail=0
+          for f in unleash unleash-standalone.sh lib/*.sh examples/*.sh tests/smoke.sh; do
             [ -f "$f" ] || continue
             echo "Checking: $f"
-            bash -n "$f" || exit 1
+            bash -n "$f" || fail=1
           done
-          echo "All files pass syntax check"
+          exit "$fail"
+
+  # Runs the tool end to end: command dispatch, the standalone artifact, dry
+  # run, argument parsing and JSON output. This is the job that would have
+  # caught "Unknown: doctor" and the standalone shipping without init.
+  smoke:
+    name: Smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install python3 for JSON validation
+        run: python3 --version
+      - name: Run smoke tests
+        run: bash tests/smoke.sh
+
+  # The tool must run on the bash 3.2 that ships with macOS and in a minimal
+  # Recovery environment, so it may not use bash 4 features or dirname.
+  compat:
+    name: Bash 3.2 / Recovery portability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: No dirname/basename/readlink/realpath
+        run: make compat
+      - name: No bash 4 only syntax
+        run: |
+          if grep -nE 'declare -A|local -A|typeset -A|mapfile|readarray|&>>|local -n|wait -n|\$\{[A-Za-z_]+(,,|\^\^\}' \
+              unleash lib/*.sh; then
+            echo "bash 4 only syntax found — macOS ships bash 3.2"
+            exit 1
+          fi
 
   markdown:
     name: Markdown Lint

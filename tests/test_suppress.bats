@@ -58,6 +58,17 @@ teardown() {
   [ ! -f "$TEST_DIR/Users/testuser/Library/Application Support/com.apple.ManagedClient.cache" ]
 }
 
+@test "HOSTS_SKIP leaves the named domains reachable" {
+  HOSTS_SKIP_DOMAINS="gdmf.apple.com,gs.apple.com"
+  DRY_RUN=false
+  suppress_enrollment "$TEST_DIR" 2>/dev/null || true
+  HOSTS_SKIP_DOMAINS=""
+  run grep -c "gdmf.apple.com" "$TEST_DIR/private/etc/hosts"
+  [ "$status" -ne 0 ]
+  run grep -c "deviceenrollment.apple.com" "$TEST_DIR/private/etc/hosts"
+  [ "$output" -gt 0 ]
+}
+
 @test "suppress_enrollment blocks org MDM host" {
   mkdir -p "$TEST_DIR/private/var/db/ConfigurationProfiles/Settings"
   cat > "$TEST_DIR/private/var/db/ConfigurationProfiles/Settings/.cloudConfigRecordFound" <<'XML'

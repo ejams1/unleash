@@ -1,14 +1,34 @@
 #!/bin/bash
+# Config globals (UNLEASH_LIBS, SCRIPT_PATH, VERBOSE, DRY_RUN, LOG_FILE) are
+# read by the modules sourced below, which shellcheck cannot see from here.
+# The directive must precede the first command to apply to the whole file.
+# shellcheck disable=SC2034
 set -euo pipefail
 
 VERSION="2.0.0"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Single source of truth for the module list: examples/build-standalone.sh and
+# `unleash doctor` read it back out of this line.
+UNLEASH_LIBS="colors config detect validate dscl suppress backup status heal firewall harden whitelist check monitor history doctor selfupdate uninstall report ma_detect demo vpn init suggest remediate telemetry predict discord"
+
+# Locate this script without dirname: a minimal Recovery environment is not
+# guaranteed to ship it, and `dirname "$0"` returns "." when $0 has no slash.
+# cd/pwd are shell builtins.
+_unleash_src="${BASH_SOURCE[0]:-$0}"
+_unleash_dir="${_unleash_src%/*}"
+if [ "$_unleash_dir" = "$_unleash_src" ]; then
+	_unleash_dir="."
+fi
+SCRIPT_DIR="$(cd "$_unleash_dir" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/${_unleash_src##*/}"
+unset _unleash_src _unleash_dir
+
 LIB_DIR="$SCRIPT_DIR/lib"
 
-for _lib in colors config detect validate dscl suppress backup status heal firewall harden whitelist check monitor history doctor selfupdate uninstall report ma_detect demo vpn init suggest remediate telemetry predict discord; do
+for _lib in $UNLEASH_LIBS; do
 	_lib_path="$LIB_DIR/$_lib.sh"
 	if [ -f "$_lib_path" ]; then
+		# shellcheck source=/dev/null
 		source "$_lib_path"
 	else
 		echo "ERROR: Library not found: $_lib_path" >&2
@@ -113,8 +133,6 @@ Bypass / suppress / monitor MDM enrollment on macOS.
   Diagnostics:
     doctor          Run pre-flight checks on this environment
     report          Generate a full markdown status report
-    history         Show event log from monitor/heal runs
-    test            Dry-run mode: simulate without changing anything
     demo            Run simulated bypass flow (no real changes)
 
   VPN:
@@ -151,6 +169,7 @@ ALIASES
     mn-st           monitor-status
     doc             doctor
     up              update
+    rep             report
     uni             uninstall
     rei             reinstall
     vk              vpn-kill
@@ -172,7 +191,8 @@ cmd_version() {
 }
 
 cmd_bypass() {
-	if is_recovery; then
+	# A simulation does not touch the disk, so it does not need Recovery.
+	if is_recovery || is_dry_run; then
 		header "Full MDM Bypass"
 		local data_mount
 		data_mount=$(resolve_data_volume)
@@ -222,6 +242,7 @@ cmd_dualboot() {
 	echo ""
 	step "Creating admin account on target"
 
+	local realName=""
 	prompt_default realName "Full name" "Apple"
 	local username
 	prompt_username username
@@ -261,7 +282,7 @@ cmd_heal() {
 		data_mount=$(resolve_data_volume)
 		heal_suppress "$data_mount"
 	else
-		if ! is_root; then
+		if ! is_root && ! is_dry_run; then
 			error_exit "Heal needs sudo: sudo ./unleash heal"
 		fi
 		heal_suppress ""
@@ -273,7 +294,7 @@ cmd_persist() {
 	if is_recovery; then
 		data_mount=$(resolve_data_volume)
 	else
-		if ! is_root; then
+		if ! is_root && ! is_dry_run; then
 			error_exit "Persistence needs sudo: sudo ./unleash persist"
 		fi
 		data_mount=""
@@ -292,7 +313,7 @@ cmd_unpersist() {
 }
 
 cmd_firewall() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Firewall needs sudo: sudo ./unleash firewall"
 	fi
 	if is_recovery; then
@@ -305,7 +326,7 @@ cmd_firewall() {
 }
 
 cmd_firewall_off() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Needs sudo: sudo ./unleash firewall-off"
 	fi
 	if is_recovery; then
@@ -318,7 +339,7 @@ cmd_firewall_off() {
 }
 
 cmd_harden() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Hardening needs sudo: sudo ./unleash harden"
 	fi
 	if is_recovery; then
@@ -328,14 +349,14 @@ cmd_harden() {
 }
 
 cmd_audit() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Audit needs sudo: sudo ./unleash audit"
 	fi
-	deep_status
+	deep_status "${1:-}"
 }
 
 cmd_whitelist() {
-	if ! is_root; then
+	if ! is_root && ! is_dry_run; then
 		error_exit "Whitelist needs sudo: sudo ./unleash whitelist"
 	fi
 	if is_recovery; then
@@ -358,7 +379,7 @@ cmd_status() {
 }
 
 cmd_check() {
-  if ! is_root; then
+  if ! is_root && ! is_dry_run; then
     error_exit "Check needs sudo: sudo ./unleash check"
   fi
   run_preformat_check
@@ -372,11 +393,15 @@ cmd_monitor() {
   while [ $# -gt 0 ]; do
     case "$1" in
       install|uninstall) args+=("$1"); shift ;;
-      --webhook) webhook="$2"; shift 2 ;;
+      --webhook)
+        [ $# -ge 2 ] || error_exit "--webhook requires a URL"
+        webhook="$2"
+        shift 2
+        ;;
       *) args+=("$1"); shift ;;
     esac
   done
-  set -- "${args[@]}"
+  set -- ${args[@]+"${args[@]}"}
   if [ -n "$webhook" ]; then
     DISCORD_WEBHOOK="$webhook"
   fi
@@ -401,7 +426,15 @@ cmd_test() {
     heal)      info "Simulating: heal";     cmd_heal ;;
     harden)    info "Simulating: harden";   cmd_harden ;;
     firewall)  info "Simulating: firewall"; cmd_firewall ;;
+    firewall-off) info "Simulating: firewall-off"; cmd_firewall_off ;;
     whitelist) info "Simulating: whitelist"; cmd_whitelist ;;
+    persist)   info "Simulating: persist";  cmd_persist ;;
+    monitor)   info "Simulating: monitor";  install_monitor_launchdaemon "" ;;
+    uninstall) info "Simulating: uninstall"; do_uninstall ;;
+    update)    info "Simulating: update";   do_self_update ;;
+    vpn-kill)  info "Simulating: vpn-kill"; vpn_kill_install ;;
+    remediate) info "Simulating: remediate"; cmd_remediate ;;
+    backup)    info "Simulating: backup";   backup_state "/" ;;
     all)
       info "Simulating all available operations..."
       info ""
@@ -409,9 +442,15 @@ cmd_test() {
       info ""
       DRY_RUN=true full_bypass_mode "/"
       info ""
+      DRY_RUN=true install_pf_mdm_block ""
+      info ""
+      DRY_RUN=true harden_live_os
+      info ""
+      DRY_RUN=true install_persist_launchdaemon ""
+      info ""
       info "Dry-run complete. No changes were made."
       ;;
-    *) info "Usage: ./unleash test {bypass|suppress|heal|harden|firewall|whitelist|all}" ;;
+    *) info "Usage: ./unleash test {bypass|suppress|heal|harden|firewall|whitelist|persist|monitor|uninstall|update|all}" ;;
   esac
 }
 
@@ -531,23 +570,31 @@ cmd_interactive_normal() {
 	done
 }
 
+PARSED_ARGS=()
+
 parse_global_opts() {
 	local args=()
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--verbose) VERBOSE=true; shift ;;
 			--dry-run) DRY_RUN=true; shift ;;
-			--log-file) LOG_FILE="$2"; shift 2 ;;
+			--log-file)
+				[ $# -ge 2 ] || error_exit "--log-file requires a path"
+				LOG_FILE="$2"
+				shift 2
+				;;
 			*) args+=("$1"); shift ;;
 		esac
 	done
-	set -- "${args[@]}"
-	echo "$@"
+	PARSED_ARGS=(${args[@]+"${args[@]}"})
 }
 
 main() {
 	load_config
-	eval "set -- $(parse_global_opts "$@")"
+	# No eval/echo round-trip: arguments containing spaces, quotes or glob
+	# characters survive intact, and no argument is silently dropped.
+	parse_global_opts "$@"
+	set -- ${PARSED_ARGS[@]+"${PARSED_ARGS[@]}"}
 
 	# Per-command help
 	if [ "${2:-}" = "--help" ] || [ "${2:-}" = "-h" ]; then
@@ -564,7 +611,7 @@ main() {
 		firewall|fw)      cmd_firewall ;;
 		firewall-off|fw-off) cmd_firewall_off ;;
 		harden)           cmd_harden ;;
-		audit)            cmd_audit "$2" ;;
+		audit)            cmd_audit "${2:-}" ;;
 		whitelist|wl)     cmd_whitelist ;;
 		backup)           cmd_backup ;;
 		restore)          cmd_restore ;;
@@ -580,15 +627,16 @@ main() {
 		monitor-stop|mn-stop) cmd_monitor_stop ;;
 		monitor-status|mn-st) cmd_monitor_status ;;
 		version|-v|--version) cmd_version ;;
+		doctor|doc)       run_doctor ;;
 		init)            cmd_init ;;
 		suggest)         cmd_suggest ;;
-		remediate)       cmd_remediate "$2" ;;
-		predict)         cmd_predict "$2" ;;
-		telemetry)       telemetry_opt_in "$2" ;;
+		remediate)       cmd_remediate "${2:-}" ;;
+		predict)         cmd_predict "${2:-}" ;;
+		telemetry)       telemetry_opt_in "${2:-}" ;;
 		demo)             run_demo ;;
 		update)           do_self_update ;;
 		uninstall)        do_uninstall ;;
-		report)           generate_report "$2" ;;
+		report|rep)       generate_report "${2:-}" ;;
 		config)           cmd_config "$@" ;;
 		vpn-kill)         vpn_kill_install "$@" ;;
 		vpn-kill-remove)  vpn_kill_remove ;;
@@ -600,7 +648,7 @@ main() {
 			install_monitor_launchdaemon ""
 			success "Reinstall complete"
 			;;
-		discord-bot)          cmd_discord_bot_install "$2" "$3" ;;
+		discord-bot)          cmd_discord_bot_install "${2:-}" "${3:-}" ;;
 		discord-bot-stop)     cmd_discord_bot_stop ;;
 		discord-bot-status)   cmd_discord_bot_status ;;
 		help|-h|--help)   show_help; exit 0 ;;

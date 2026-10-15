@@ -1,24 +1,39 @@
+# shellcheck shell=bash
 run_doctor() {
   header "Unleash Doctor — Pre-Flight Check"
 
   local errors=0 warnings=0
+  local _lib lib_count=0 lib_missing=0
 
   begin "Script location"
-  if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR" ]; then
+  if [ -n "${SCRIPT_DIR:-}" ] && [ -d "${SCRIPT_DIR:-}" ]; then
     end_ok; echo "     $SCRIPT_DIR"
   else
-    end_fail; errors=$((errors + 1))
+    end_fail; echo "     Cannot locate script directory"; errors=$((errors + 1))
   fi
 
   begin "Library files"
-  local missing=0
-  for _lib in colors detect validate dscl suppress backup status heal firewall harden whitelist check monitor history; do
-    [ -f "$LIB_DIR/$_lib.sh" ] || missing=$((missing + 1))
+  for _lib in ${UNLEASH_LIBS:-}; do
+    lib_count=$((lib_count + 1))
+    if [ -d "${LIB_DIR:-}" ] && [ ! -f "$LIB_DIR/$_lib.sh" ]; then
+      lib_missing=$((lib_missing + 1))
+    fi
   done
-  if [ "$missing" -eq 0 ]; then
-    end_ok; echo "     13/13 modules loaded"
+  if [ "$lib_count" -eq 0 ]; then
+    end_fail; echo "     Module list not loaded"; errors=$((errors + 1))
+  elif [ ! -d "${LIB_DIR:-}" ]; then
+    # The standalone build inlines the modules: no lib/ directory, but the
+    # functions are present.
+    if type suppress_enrollment >/dev/null 2>&1 && type run_doctor >/dev/null 2>&1; then
+      end_ok; echo "     $lib_count modules inlined (standalone build)"
+    else
+      end_fail; echo "     $lib_count module(s) missing (no library directory at ${LIB_DIR:-unset})"
+      errors=$((errors + 1))
+    fi
+  elif [ "$lib_missing" -eq 0 ]; then
+    end_ok; echo "     $lib_count/$lib_count modules loaded"
   else
-    end_fail; echo "     $missing module(s) missing"; errors=$((errors + 1))
+    end_fail; echo "     $lib_missing module(s) missing"; errors=$((errors + 1))
   fi
 
   begin "Root privileges"
@@ -38,10 +53,8 @@ run_doctor() {
   fi
 
   begin "Disk space (Data volume)"
-  local mount_pt
-  mount_pt=$(df / 2>/dev/null | awk 'NR>1 {print $NF; exit}')
   local avail
-  avail=$(df / 2>/dev/null | awk 'NR>1 {print $4; exit}')
+  avail=$(df -k / 2>/dev/null | awk 'NR>1 {print $4; exit}')
   if [ -n "$avail" ] && [ "$avail" -gt 1048576 ]; then
     end_ok; echo "     $(echo "$avail" | awk '{printf "%.0f MB", $1/1024}') free"
   elif [ -n "$avail" ]; then
@@ -51,28 +64,28 @@ run_doctor() {
   fi
 
   begin "Internet access"
-  if command -v curl &>/dev/null && curl -s --max-time 3 https://github.com >/dev/null 2>&1; then
+  if command -v curl >/dev/null 2>&1 && curl -s --max-time 3 https://github.com >/dev/null 2>&1; then
     end_ok; echo "     Online"
   else
     end_fail; echo "     Offline (expected in Recovery)"
   fi
 
   begin "pfctl available"
-  if command -v pfctl &>/dev/null; then
+  if command -v pfctl >/dev/null 2>&1; then
     end_ok
   else
     end_fail; echo "     Firewall commands unavailable"
   fi
 
   begin "profiles command"
-  if command -v profiles &>/dev/null; then
+  if command -v profiles >/dev/null 2>&1; then
     end_ok
   else
     end_fail; echo "     Audit/harden commands limited"
   fi
 
   begin "launchctl available"
-  if command -v launchctl &>/dev/null; then
+  if command -v launchctl >/dev/null 2>&1; then
     end_ok
   else
     end_fail; echo "     Persistence commands unavailable"

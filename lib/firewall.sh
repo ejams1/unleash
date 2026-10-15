@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 FIREWALL_ANCHOR="com.unleash/mdm"
 FIREWALL_CONF="/etc/pf.conf"
@@ -7,7 +8,8 @@ pf_backup_anchor() {
 	local root="$1"
 	local anchor_file="${root}${FIREWALL_ANCHOR_DIR}/${FIREWALL_ANCHOR}"
 	[ ! -f "$anchor_file" ] && return 0
-	local backup="${anchor_file}.backup.$(date +%s)"
+	local backup
+	backup="${anchor_file}.backup.$(date +%s)"
 	cp "$anchor_file" "$backup" && info "Backed up pf anchor: $backup"
 }
 
@@ -15,7 +17,8 @@ pf_backup_conf() {
 	local root="$1"
 	local pf_conf="${root}${FIREWALL_CONF}"
 	[ ! -f "$pf_conf" ] && return 0
-	local backup="${pf_conf}.backup.$(date +%s)"
+	local backup
+	backup="${pf_conf}.backup.$(date +%s)"
 	cp "$pf_conf" "$backup" && info "Backed up pf.conf: $backup"
 }
 
@@ -29,6 +32,10 @@ install_pf_mdm_block() {
 
 	local anchor_dir="${root}${FIREWALL_ANCHOR_DIR}"
 	local anchor_file="${anchor_dir}/${FIREWALL_ANCHOR}"
+
+	if skip_if_dry_run "write pf anchor ${FIREWALL_ANCHOR} and load it"; then
+		return 0
+	fi
 
 	pf_backup_anchor "$root"
 	mkdir -p "$anchor_dir"
@@ -45,7 +52,11 @@ ANCHOR
 
 	local pf_conf="${root}${FIREWALL_CONF}"
 	local anchor_line="anchor \"${FIREWALL_ANCHOR}\""
-	local load_line="load anchor \"${FIREWALL_ANCHOR}\" from \"${anchor_file}\""
+	# pf resolves this path at boot, when the Recovery mount is gone: using the
+	# mount-prefixed path left pf unable to load the anchor (and to load
+	# pf.conf at all) after the reboot.
+	local anchor_boot_path="${FIREWALL_ANCHOR_DIR}/${FIREWALL_ANCHOR}"
+	local load_line="load anchor \"${FIREWALL_ANCHOR}\" from \"${anchor_boot_path}\""
 
 	if [ -f "$pf_conf" ]; then
 		if grep -q "com.unleash" "$pf_conf" 2>/dev/null; then
@@ -95,6 +106,10 @@ remove_pf_mdm_block() {
 	[ -n "$data_mount" ] && root="$data_mount"
 
 	step "Removing Unleash pf anchor..."
+
+	if skip_if_dry_run "remove the pf MDM anchor and flush it"; then
+		return 0
+	fi
 
 	local anchor_file="${root}${FIREWALL_ANCHOR_DIR}/${FIREWALL_ANCHOR}"
 	if [ -f "$anchor_file" ]; then
