@@ -45,14 +45,19 @@ brew install mateussiqueira/unleash/unleash
 
 **Download direto**
 ```bash
-curl -L https://raw.githubusercontent.com/mateussiqueira/unleash/main/unleash-standalone.sh -o unleash
-chmod +x unleash
+REPO=ejams1/unleash      # troque por mateussiqueira/unleash quando o upstream receber as correções
+mkdir -p ~/unleash
+curl -fsSL "https://raw.githubusercontent.com/$REPO/main/unleash-standalone.sh" \
+  -o ~/unleash/unleash-standalone.sh
+chmod +x ~/unleash/unleash-standalone.sh
 ```
 
 **De um pendrive USB (para o modo Recovery)**
 1. Formate um USB/SSD como FAT32, APFS ou exFAT
-2. Copie a pasta `unleash` (ou apenas `unleash-standalone.sh`) para o drive
+2. Copie a pasta `unleash` inteira para o drive, ou coloque o `unleash-standalone.sh` dentro de uma pasta — o backup é gravado um nível acima do script
 3. Inicialize no Recovery e execute de `/Volumes/SeuDrive/unleash`
+
+**Sem pendrive? Baixe no Recovery com curl** — veja [Instalação](install.md#via-curl-no-recovery-precisa-de-internet).
 
 ---
 

@@ -9,6 +9,24 @@ Keep this on your SSD alongside the script.
 3. Run → `"/Volumes/YourSSD/unleash/unleash"`
 4. Pick "Full bypass" from the menu
 
+## Sem SSD (no Recovery, com internet)
+
+```bash
+REPO=ejams1/unleash
+mkdir -p /tmp/unleash && cd /tmp/unleash
+curl -fsSL "https://raw.githubusercontent.com/$REPO/main/unleash-standalone.sh" -o unleash-standalone.sh
+chmod +x unleash-standalone.sh
+
+./unleash-standalone.sh doctor        # confere caminho, módulos e modo Recovery
+./unleash-standalone.sh test all      # simulação: não grava nada
+./unleash-standalone.sh backup        # salvo em /tmp/.unleash-backup
+./unleash-standalone.sh suppress      # ou bypass (cria usuário admin + pula o Setup Assistant)
+```
+
+Pasta obrigatória: o `backup` grava um nível acima do script, e `/` é somente
+leitura no Recovery. `/tmp` é disco em memória — copie `/tmp/.unleash-backup`
+para um pendrive antes de reiniciar se quiser usar `restore` depois.
+
 ## Common scenarios
 
 | Você quer... | Comando |
