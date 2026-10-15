@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 generate_report() {
   if [ "${1:-}" = "--json" ]; then
     generate_report_json

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 VPN_RULES_ANCHOR="com.unleash/vpn-kill"
 VPN_RULES_FILE="/etc/pf.anchors/com.unleash/vpn-kill"
@@ -12,7 +13,7 @@ vpn_kill_install() {
 
 	# Parse --interface/-i explicitly: the flag itself used to be taken as the
 	# interface name because the argument was read positionally.
-	local user_if="" arg
+	local user_if=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--interface|-i)

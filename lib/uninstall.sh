@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 do_uninstall() {
   header "Unleash — Full Uninstall"
 

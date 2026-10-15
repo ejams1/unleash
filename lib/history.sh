@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 show_history() {
   header "Unleash Event History"
 

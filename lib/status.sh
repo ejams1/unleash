@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 # Count matching lines, returning 0 rather than an empty value when the file
 # is missing or has no matches. `grep -c` prints 0 and exits 1 when it finds
@@ -110,7 +111,7 @@ deep_status() {
 	local cfg="${data_mount}/private/var/db/ConfigurationProfiles/Settings"
 
 	if [ "$data_mount" = "--json" ]; then
-		deep_status_json
+		deep_status_json ""
 		return
 	fi
 	header "Deep MDM Audit"
@@ -156,8 +157,16 @@ deep_status() {
 	local found=0
 	for home in /Users/*/; do
 		[ -d "$home/Library/LaunchAgents" ] || continue
-		local user_agents
-		user_agents=$(ls "$home/Library/LaunchAgents/" 2>/dev/null | grep -iE "mdm|enrollment|managed" || true)
+		local user_agents=""
+		local _agent _name _lower
+		for _agent in "$home/Library/LaunchAgents/"*; do
+			[ -f "$_agent" ] || continue
+			_name=${_agent##*/}
+			_lower=$(printf '%s' "$_name" | tr '[:upper:]' '[:lower:]')
+			case "$_lower" in
+				*mdm*|*enrollment*|*managed*) user_agents="$user_agents $_name" ;;
+			esac
+		done
 		if [ -n "$user_agents" ]; then
 			local who="${home%/}"
 			who="${who##*/}"
@@ -172,8 +181,16 @@ deep_status() {
 	echo ""
 
 	step "MDM LaunchDaemons (System)"
-	local sys_agents
-	sys_agents=$(ls /Library/LaunchDaemons/ 2>/dev/null | grep -iE "mdm|enrollment|managed" || true)
+	local sys_agents=""
+	local _daemon _dname _dlower
+	for _daemon in /Library/LaunchDaemons/*; do
+		[ -f "$_daemon" ] || continue
+		_dname=${_daemon##*/}
+		_dlower=$(printf '%s' "$_dname" | tr '[:upper:]' '[:lower:]')
+		case "$_dlower" in
+			*mdm*|*enrollment*|*managed*) sys_agents="$sys_agents $_dname" ;;
+		esac
+	done
 	if [ -n "$sys_agents" ]; then
 		echo "$sys_agents" | sed 's/^/  /'
 	else

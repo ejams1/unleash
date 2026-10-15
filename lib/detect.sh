@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 is_recovery() {
 	[ -d "/System/Installation" ] && return 0

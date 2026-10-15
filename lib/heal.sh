@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 heal_suppress() {
 	local data_mount="$1"

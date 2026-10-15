@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 dscl_node() {
 	local data_mount="$1"

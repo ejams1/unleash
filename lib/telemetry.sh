@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 TELEMETRY_FILE="$(unleash_user_home)/.unleash-telemetry"
 

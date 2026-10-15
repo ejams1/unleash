@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 GPG_KEY_URL="https://raw.githubusercontent.com/mateussiqueira/unleash/main/.github/unleash.gpg"
 
 import_gpg_key() {

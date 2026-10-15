@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 harden_live_os() {
 	if skip_if_dry_run "kill MDM processes, remove residual profiles, clean LaunchAgents and flush DNS"; then

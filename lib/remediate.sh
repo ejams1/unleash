@@ -1,5 +1,4 @@
-
-CMD_SUGGEST=""
+# shellcheck shell=bash
 
 known_orgs() {
   cat << 'ORGS'

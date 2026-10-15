@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+# Config globals (UNLEASH_LIBS, SCRIPT_PATH, VERBOSE, DRY_RUN, LOG_FILE) are
+# read by the modules sourced below, which shellcheck cannot see from here.
+# shellcheck disable=SC2034
+
 VERSION="2.0.0"
 
 # Single source of truth for the module list: examples/build-standalone.sh and
@@ -24,6 +28,7 @@ LIB_DIR="$SCRIPT_DIR/lib"
 for _lib in $UNLEASH_LIBS; do
 	_lib_path="$LIB_DIR/$_lib.sh"
 	if [ -f "$_lib_path" ]; then
+		# shellcheck source=/dev/null
 		source "$_lib_path"
 	else
 		echo "ERROR: Library not found: $_lib_path" >&2
@@ -237,6 +242,7 @@ cmd_dualboot() {
 	echo ""
 	step "Creating admin account on target"
 
+	local realName=""
 	prompt_default realName "Full name" "Apple"
 	local username
 	prompt_username username

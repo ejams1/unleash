@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 detect_configurator_enrollment() {
   local data_mount="${1:-}"
 
@@ -83,8 +84,15 @@ detect_migration_assistant() {
 
     local user_agents="$home/Library/LaunchAgents"
     if [ -d "$user_agents" ]; then
-      local found
-      found=$(ls "$user_agents" 2>/dev/null | grep -ciE "mdm|enrollment|managed" || true)
+      local found=0 _agent _name _lower
+      for _agent in "$user_agents"/*; do
+        [ -f "$_agent" ] || continue
+        _name=${_agent##*/}
+        _lower=$(printf '%s' "$_name" | tr '[:upper:]' '[:lower:]')
+        case "$_lower" in
+          *mdm*|*enrollment*|*managed*) found=$((found + 1)) ;;
+        esac
+      done
       if [ "$found" -gt 0 ]; then
         ma_indicators=$((ma_indicators + found))
         details="$details  $user: $found MDM LaunchAgent(s)\n"

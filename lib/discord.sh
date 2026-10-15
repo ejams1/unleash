@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 DISCORD_BOT_DIR="/tmp/unleash-discord"
 DISCORD_BOT_SCRIPT="${DISCORD_BOT_DIR}/bot.sh"

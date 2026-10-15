@@ -1,4 +1,5 @@
-
+# shellcheck shell=bash
+# shellcheck disable=SC2034  # these globals are read by the other modules
 # Home directory of the user who invoked the tool. It normally runs under
 # sudo, where $HOME is /var/root, and the settings would land in the wrong
 # place (and be invisible to the user).

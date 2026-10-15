@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 install_monitor_launchdaemon() {
   local data_mount="$1"
   local root=""

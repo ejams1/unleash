@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 # Messages go to stdout so callers can capture them; the exit status carries
 # the verdict. (They used to go to stderr, so `msg=$(validate_username ...)`

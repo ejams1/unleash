@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 MDM_BLOCKLIST="mdmenrollment.apple.com deviceenrollment.apple.com iprofiles.apple.com"
 

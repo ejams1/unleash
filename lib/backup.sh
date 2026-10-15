@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 # Backup directory sits next to the unleash folder (not inside it), so it
 # travels with the USB stick / checkout it was taken from. Derived from

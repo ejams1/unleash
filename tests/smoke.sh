@@ -144,13 +144,11 @@ check_output "test persist simulates" "[DRY RUN]" "$UNLEASH" test persist
 
 echo "== json output =="
 if command -v python3 >/dev/null 2>&1; then
-  for cmd in report; do
-    if "$UNLEASH" "$cmd" --json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
-      pass "unleash $cmd --json is valid JSON"
-    else
-      fail "unleash $cmd --json is not valid JSON"
-    fi
-  done
+  if "$UNLEASH" report --json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+    pass "unleash report --json is valid JSON"
+  else
+    fail "unleash report --json is not valid JSON"
+  fi
 else
   printf 'skip python3 not available, JSON not validated\n'
 fi

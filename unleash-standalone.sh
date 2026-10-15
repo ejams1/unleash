@@ -16,6 +16,7 @@ SCRIPT_DIR="$(cd "$_unleash_dir" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/${_unleash_src##*/}"
 LIB_DIR="$SCRIPT_DIR/lib"
 unset _unleash_src _unleash_dir
+# shellcheck shell=bash
 RED='\033[1;31m'
 GRN='\033[1;32m'
 BLU='\033[1;34m'
@@ -180,7 +181,8 @@ confirm() {
   esac
 }
 
-
+# shellcheck shell=bash
+# shellcheck disable=SC2034  # these globals are read by the other modules
 # Home directory of the user who invoked the tool. It normally runs under
 # sudo, where $HOME is /var/root, and the settings would land in the wrong
 # place (and be invisible to the user).
@@ -295,6 +297,7 @@ cmd_config() {
 	esac
 }
 
+# shellcheck shell=bash
 
 is_recovery() {
 	[ -d "/System/Installation" ] && return 0
@@ -414,6 +417,7 @@ resolve_target_volumes() {
 	echo "$sys_path|$data_path"
 }
 
+# shellcheck shell=bash
 
 # Messages go to stdout so callers can capture them; the exit status carries
 # the verdict. (They used to go to stderr, so `msg=$(validate_username ...)`
@@ -464,6 +468,7 @@ prompt_password() {
 	done
 }
 
+# shellcheck shell=bash
 
 dscl_node() {
 	local data_mount="$1"
@@ -542,6 +547,7 @@ add_to_filevault() {
 	fi
 }
 
+# shellcheck shell=bash
 
 PB=/usr/libexec/PlistBuddy
 
@@ -777,6 +783,7 @@ full_bypass_mode() {
 	echo -e "${YEL}After macOS update: re-run. Never 'profiles renew'.${NC}"
 }
 
+# shellcheck shell=bash
 
 # Backup directory sits next to the unleash folder (not inside it), so it
 # travels with the USB stick / checkout it was taken from. Derived from
@@ -895,6 +902,7 @@ has_backup() {
 	[ -f "$BACKUP_DIR/timestamp" ]
 }
 
+# shellcheck shell=bash
 
 # Count matching lines, returning 0 rather than an empty value when the file
 # is missing or has no matches. `grep -c` prints 0 and exits 1 when it finds
@@ -1007,7 +1015,7 @@ deep_status() {
 	local cfg="${data_mount}/private/var/db/ConfigurationProfiles/Settings"
 
 	if [ "$data_mount" = "--json" ]; then
-		deep_status_json
+		deep_status_json ""
 		return
 	fi
 	header "Deep MDM Audit"
@@ -1053,8 +1061,16 @@ deep_status() {
 	local found=0
 	for home in /Users/*/; do
 		[ -d "$home/Library/LaunchAgents" ] || continue
-		local user_agents
-		user_agents=$(ls "$home/Library/LaunchAgents/" 2>/dev/null | grep -iE "mdm|enrollment|managed" || true)
+		local user_agents=""
+		local _agent _name _lower
+		for _agent in "$home/Library/LaunchAgents/"*; do
+			[ -f "$_agent" ] || continue
+			_name=${_agent##*/}
+			_lower=$(printf '%s' "$_name" | tr '[:upper:]' '[:lower:]')
+			case "$_lower" in
+				*mdm*|*enrollment*|*managed*) user_agents="$user_agents $_name" ;;
+			esac
+		done
 		if [ -n "$user_agents" ]; then
 			local who="${home%/}"
 			who="${who##*/}"
@@ -1069,8 +1085,16 @@ deep_status() {
 	echo ""
 
 	step "MDM LaunchDaemons (System)"
-	local sys_agents
-	sys_agents=$(ls /Library/LaunchDaemons/ 2>/dev/null | grep -iE "mdm|enrollment|managed" || true)
+	local sys_agents=""
+	local _daemon _dname _dlower
+	for _daemon in /Library/LaunchDaemons/*; do
+		[ -f "$_daemon" ] || continue
+		_dname=${_daemon##*/}
+		_dlower=$(printf '%s' "$_dname" | tr '[:upper:]' '[:lower:]')
+		case "$_dlower" in
+			*mdm*|*enrollment*|*managed*) sys_agents="$sys_agents $_dname" ;;
+		esac
+	done
 	if [ -n "$sys_agents" ]; then
 		echo "$sys_agents" | sed 's/^/  /'
 	else
@@ -1161,6 +1185,7 @@ deep_status_json() {
 	echo -e "$json"
 }
 
+# shellcheck shell=bash
 
 heal_suppress() {
 	local data_mount="$1"
@@ -1323,6 +1348,7 @@ remove_persist_launchdaemon() {
 	fi
 }
 
+# shellcheck shell=bash
 
 FIREWALL_ANCHOR="com.unleash/mdm"
 FIREWALL_CONF="/etc/pf.conf"
@@ -1332,7 +1358,8 @@ pf_backup_anchor() {
 	local root="$1"
 	local anchor_file="${root}${FIREWALL_ANCHOR_DIR}/${FIREWALL_ANCHOR}"
 	[ ! -f "$anchor_file" ] && return 0
-	local backup="${anchor_file}.backup.$(date +%s)"
+	local backup
+	backup="${anchor_file}.backup.$(date +%s)"
 	cp "$anchor_file" "$backup" && info "Backed up pf anchor: $backup"
 }
 
@@ -1340,7 +1367,8 @@ pf_backup_conf() {
 	local root="$1"
 	local pf_conf="${root}${FIREWALL_CONF}"
 	[ ! -f "$pf_conf" ] && return 0
-	local backup="${pf_conf}.backup.$(date +%s)"
+	local backup
+	backup="${pf_conf}.backup.$(date +%s)"
 	cp "$pf_conf" "$backup" && info "Backed up pf.conf: $backup"
 }
 
@@ -1469,6 +1497,7 @@ pf_status() {
 	fi
 }
 
+# shellcheck shell=bash
 
 harden_live_os() {
 	if skip_if_dry_run "kill MDM processes, remove residual profiles, clean LaunchAgents and flush DNS"; then
@@ -1581,6 +1610,7 @@ harden_status() {
 	ps aux 2>/dev/null | grep -iE "mdm|managedclient|activation" | grep -v grep || info "None running"
 }
 
+# shellcheck shell=bash
 
 MDM_BLOCKLIST="mdmenrollment.apple.com deviceenrollment.apple.com iprofiles.apple.com"
 
@@ -1674,6 +1704,7 @@ restore_hosts_based_block() {
   fi
 }
 
+# shellcheck shell=bash
 run_preformat_check() {
   header "Pre-Format MDM Assessment"
 
@@ -1804,6 +1835,7 @@ check_upgrade_safety() {
   fi
 }
 
+# shellcheck shell=bash
 install_monitor_launchdaemon() {
   local data_mount="$1"
   local root=""
@@ -2011,6 +2043,7 @@ monitor_status() {
   fi
 }
 
+# shellcheck shell=bash
 show_history() {
   header "Unleash Event History"
 
@@ -2058,6 +2091,7 @@ clear_history() {
   done
 }
 
+# shellcheck shell=bash
 run_doctor() {
   header "Unleash Doctor — Pre-Flight Check"
 
@@ -2198,6 +2232,7 @@ run_doctor() {
   echo -e "${CYAN}╚══════════════════════════════════════╝${NC}"
 }
 
+# shellcheck shell=bash
 GPG_KEY_URL="https://raw.githubusercontent.com/mateussiqueira/unleash/main/.github/unleash.gpg"
 
 import_gpg_key() {
@@ -2307,6 +2342,7 @@ do_self_update() {
   info "Run again to use new version"
 }
 
+# shellcheck shell=bash
 do_uninstall() {
   header "Unleash — Full Uninstall"
 
@@ -2412,6 +2448,7 @@ do_uninstall() {
   info "The unleash script itself was not removed."
 }
 
+# shellcheck shell=bash
 generate_report() {
   if [ "${1:-}" = "--json" ]; then
     generate_report_json
@@ -2574,6 +2611,7 @@ generate_report_json() {
   echo -e "$report"
 }
 
+# shellcheck shell=bash
 detect_configurator_enrollment() {
   local data_mount="${1:-}"
 
@@ -2659,8 +2697,15 @@ detect_migration_assistant() {
 
     local user_agents="$home/Library/LaunchAgents"
     if [ -d "$user_agents" ]; then
-      local found
-      found=$(ls "$user_agents" 2>/dev/null | grep -ciE "mdm|enrollment|managed" || true)
+      local found=0 _agent _name _lower
+      for _agent in "$user_agents"/*; do
+        [ -f "$_agent" ] || continue
+        _name=${_agent##*/}
+        _lower=$(printf '%s' "$_name" | tr '[:upper:]' '[:lower:]')
+        case "$_lower" in
+          *mdm*|*enrollment*|*managed*) found=$((found + 1)) ;;
+        esac
+      done
       if [ "$found" -gt 0 ]; then
         ma_indicators=$((ma_indicators + found))
         details="$details  $user: $found MDM LaunchAgent(s)\n"
@@ -2750,6 +2795,8 @@ clean_ma_artifacts() {
   info "User-level MDM artifacts cleaned"
 }
 
+# shellcheck shell=bash
+# shellcheck disable=SC2034  # DRY_RUN is read by suppress_enrollment
 run_demo() {
   header "Unleash Demo — Simulated MDM Bypass"
 
@@ -2835,6 +2882,7 @@ run_demo() {
   echo -e "${CYAN}╚═══════════════════════════════════════════════╝${NC}"
 }
 
+# shellcheck shell=bash
 
 VPN_RULES_ANCHOR="com.unleash/vpn-kill"
 VPN_RULES_FILE="/etc/pf.anchors/com.unleash/vpn-kill"
@@ -2849,7 +2897,7 @@ vpn_kill_install() {
 
 	# Parse --interface/-i explicitly: the flag itself used to be taken as the
 	# interface name because the argument was read positionally.
-	local user_if="" arg
+	local user_if=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--interface|-i)
@@ -2984,6 +3032,7 @@ vpn_kill_status() {
 	fi
 }
 
+# shellcheck shell=bash
 
 cmd_init() {
   header "unleash init — Setup Wizard"
@@ -3077,6 +3126,7 @@ cmd_init() {
   info "  - After login:   sudo ./unleash harden"
 }
 
+# shellcheck shell=bash
 
 cmd_suggest() {
   header "unleash suggest — Risk-Based Recommendations"
@@ -3152,8 +3202,7 @@ cmd_suggest() {
   echo -e "$recommendations" | sed '/^$/d'
 }
 
-
-CMD_SUGGEST=""
+# shellcheck shell=bash
 
 known_orgs() {
   cat << 'ORGS'
@@ -3230,6 +3279,7 @@ cmd_remediate() {
   info "If MDM returns, open an issue with the org name."
 }
 
+# shellcheck shell=bash
 
 TELEMETRY_FILE="$(unleash_user_home)/.unleash-telemetry"
 
@@ -3273,6 +3323,7 @@ telemetry_send() {
 		-d "$payload" "$url" 2>/dev/null || true
 }
 
+# shellcheck shell=bash
 
 cmd_predict() {
   header "unleash predict — Serial Number Lookup"
@@ -3332,6 +3383,7 @@ ORGS
   info "For definitive ownership: https://checkcoverage.apple.com"
 }
 
+# shellcheck shell=bash
 
 DISCORD_BOT_DIR="/tmp/unleash-discord"
 DISCORD_BOT_SCRIPT="${DISCORD_BOT_DIR}/bot.sh"
@@ -3621,6 +3673,7 @@ cmd_dualboot() {
 	echo ""
 	step "Creating admin account on target"
 
+	local realName=""
 	prompt_default realName "Full name" "Apple"
 	local username
 	prompt_username username

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 PB=/usr/libexec/PlistBuddy
 

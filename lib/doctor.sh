@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 run_doctor() {
   header "Unleash Doctor — Pre-Flight Check"
 

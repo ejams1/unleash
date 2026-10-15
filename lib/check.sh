@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 run_preformat_check() {
   header "Pre-Format MDM Assessment"
 
