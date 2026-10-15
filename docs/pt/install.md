@@ -34,7 +34,7 @@ sudo ./unleash init
 ## Via curl no Recovery (precisa de internet)
 
 ```bash
-curl -L https://raw.githubusercontent.com/mateussiqueira/unleash/main/unleash -o /tmp/unleash
+curl -L https://raw.githubusercontent.com/mateussiqueira/unleash/main/unleash-standalone.sh -o /tmp/unleash
 chmod +x /tmp/unleash && /tmp/unleash bypass
 ```
 

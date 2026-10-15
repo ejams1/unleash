@@ -1,6 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 VERSION="2.0.0"
+UNLEASH_LIBS="colors config detect validate dscl suppress backup status heal firewall harden whitelist check monitor history doctor selfupdate uninstall report ma_detect demo vpn init suggest remediate telemetry predict discord"
+
+# Locate this script without dirname (a minimal Recovery environment is not
+# guaranteed to ship it). cd/pwd are shell builtins. SCRIPT_DIR/SCRIPT_PATH
+# are referenced by the LaunchDaemon installers; LIB_DIR is only used for
+# display here, the modules below are inlined.
+_unleash_src="${BASH_SOURCE[0]:-$0}"
+_unleash_dir="${_unleash_src%/*}"
+if [ "$_unleash_dir" = "$_unleash_src" ]; then
+	_unleash_dir="."
+fi
+SCRIPT_DIR="$(cd "$_unleash_dir" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/${_unleash_src##*/}"
+LIB_DIR="$SCRIPT_DIR/lib"
+unset _unleash_src _unleash_dir
 RED='\033[1;31m'
 GRN='\033[1;32m'
 BLU='\033[1;34m'
@@ -13,6 +28,9 @@ LOG_FILE=""
 VERBOSE=false
 DRY_RUN=false
 
+# Diagnostics go to stderr. Callers capture the stdout of helper functions
+# (data_mount=$(resolve_data_volume), backup paths, ...) and a log line on
+# stdout would be captured as part of the returned value.
 log() {
   local level="$1"
   local msg="$2"
@@ -35,7 +53,7 @@ log() {
 
   local ts
   ts=$(date '+%H:%M:%S')
-  echo -e "${color}[${label}]${NC} ${msg}"
+  echo -e "${color}[${label}]${NC} ${msg}" >&2
 
   if [ -n "$LOG_FILE" ]; then
     echo "[${ts}] [${label}] ${msg}" >> "$LOG_FILE" 2>/dev/null || true
@@ -43,7 +61,7 @@ log() {
 }
 
 error_exit() {
-  log "ERROR" "$1" >&2
+  log "ERROR" "$1"
   exit 1
 }
 
@@ -67,15 +85,36 @@ debug() {
   log "DEBUG" "$1"
 }
 
+# True while a --dry-run / `unleash test` simulation is in progress.
+is_dry_run() {
+  [ "${DRY_RUN:-false}" = true ]
+}
+
+# Usage: skip_if_dry_run "do the thing" && return 0
+# Returns 0 (and prints the notice) while simulating, 1 for a real run.
+skip_if_dry_run() {
+  if is_dry_run; then
+    info "[DRY RUN] Would $1"
+    return 0
+  fi
+  return 1
+}
+
 header() {
   local title="$1"
-  local len="${#title}"
-  local line
-  line=$(printf '%*s' "$((len + 4))" | tr ' ' '═')
+  local width=$(( ${#title} + 4 ))
+  local bar=""
+  local i=0
+  # Built in pure bash: `tr ' ' '═'` is not multibyte-safe with the BSD tr
+  # shipped on macOS.
+  while [ "$i" -lt "$width" ]; do
+    bar="${bar}═"
+    i=$((i + 1))
+  done
   echo ""
-  echo -e "${CYAN}╔${line}╗${NC}"
+  echo -e "${CYAN}╔${bar}╗${NC}"
   echo -e "${CYAN}║  ${title}  ║${NC}"
-  echo -e "${CYAN}╚${line}╝${NC}"
+  echo -e "${CYAN}╚${bar}╝${NC}"
   echo ""
 }
 
@@ -105,21 +144,40 @@ end_fail() {
   echo -e "${RED}✗${NC}"
 }
 
+# Prompt for a line and assign it to the variable named by $1.
+# printf -v is used instead of eval, so quotes, $ and backslashes in the
+# answer are taken literally.
 prompt_default() {
   local var_name="$1"
   local prompt_text="$2"
   local default="$3"
-  local value
-  read -p "${CYAN}${prompt_text}${NC} (default '${default}'): " value
-  value="${value:=$default}"
-  eval "$var_name=\"$value\""
+  local value=""
+  read -r -p "${CYAN}${prompt_text}${NC} (default '${default}'): " value || value=""
+  [ -n "$value" ] || value="$default"
+  printf -v "$var_name" '%s' "$value"
+}
+
+# Notify the user logged into the console, if there is one. A LaunchDaemon
+# has no GUI session, where osascript would silently fail.
+notify_user() {
+  local title="$1"
+  local message="$2"
+  command -v osascript >/dev/null 2>&1 || return 0
+  local console_user=""
+  console_user=$(stat -f %Su /dev/console 2>/dev/null || echo "")
+  [ -n "$console_user" ] || return 0
+  [ "$console_user" = "root" ] && return 0
+  osascript -e "display notification \"$message\" with title \"$title\"" >/dev/null 2>&1 || true
 }
 
 confirm() {
   local prompt="$1"
-  local response
-  read -p "${prompt} (y/N): " response
-  [[ "$response" =~ ^[Yy]$ ]]
+  local response=""
+  read -r -p "${prompt} (y/N): " response || response=""
+  case "$response" in
+    [Yy]) return 0 ;;
+    *)    return 1 ;;
+  esac
 }
 
 CONFIG_FILE="$HOME/.unleash.conf"
@@ -692,11 +750,32 @@ has_backup() {
 }
 
 
+# Count matching lines, returning 0 rather than an empty value when the file
+# is missing or has no matches. `grep -c` prints 0 and exits 1 when it finds
+# nothing, so `|| echo 0` yields "0\n0" and breaks every [ -gt ] test.
+count_lines() {
+	local matches=0
+	matches=$(grep -c "$1" "$2" 2>/dev/null || true)
+	printf '%s' "${matches:-0}"
+}
+
+# Number of installed configuration profiles (0 when none/detection fails).
+count_profiles() {
+	local profiles=0
+	if command -v profiles >/dev/null 2>&1; then
+		# -output xml writes files into the CWD; stdout-xml prints to stdout.
+		profiles=$(sudo profiles -C -output stdout-xml 2>/dev/null | grep -c "ProfileDisplayName" || true)
+		profiles="${profiles:-0}"
+	fi
+	printf '%s' "$profiles"
+}
+
 check_mdm_status() {
 	local data_mount="$1"
 	local hosts="$data_mount/private/etc/hosts"
 	local cfg="$data_mount/private/var/db/ConfigurationProfiles/Settings"
 	local ldp="$data_mount/private/var/db/com.apple.xpc.launchd/disabled.plist"
+	local expected=13
 
 	header "MDM Status Report"
 
@@ -722,7 +801,7 @@ check_mdm_status() {
 	step "Blocked domains in hosts"
 	if [ -f "$hosts" ]; then
 		local matches
-		matches=$(grep -iE 'iprofiles|enrollment|mdm|acmdm|albert|gdmf|configuration|xp\.apple|gs\.apple|tb\.apple' "$hosts" 2>/dev/null)
+		matches=$(grep -iE 'iprofiles|enrollment|mdm|acmdm|albert|gdmf|configuration|xp\.apple|gs\.apple|tb\.apple' "$hosts" 2>/dev/null || true)
 		if [ -n "$matches" ]; then
 			echo "$matches" | while IFS= read -r line; do
 				echo -e "  ${GRN}$line${NC}"
@@ -730,8 +809,12 @@ check_mdm_status() {
 		else
 			echo -e "  ${YEL}(none)${NC}"
 		fi
-		local count; count=$(echo "$matches" | grep -c . 2>/dev/null || echo 0)
-		echo -e "  ${CYAN}Total: $count of 13 expected domains blocked${NC}"
+		local count
+		count=$(count_lines '^0\.0\.0\.0 ' "$hosts")
+		if [ "${#MDM_DOMAINS[@]}" -gt 0 ]; then
+			expected="${#MDM_DOMAINS[@]}"
+		fi
+		echo -e "  ${CYAN}Total: $count of $expected expected domains blocked${NC}"
 	else
 		echo -e "  ${YEL}(hosts not found)${NC}"
 	fi
@@ -739,14 +822,14 @@ check_mdm_status() {
 
 	step "Enrollment daemon status"
 	if [ -f "$ldp" ]; then
-		/usr/libexec/PlistBuddy -c "Print" "$ldp" 2>/dev/null || echo -e "  ${YEL}(empty/corrupt)${NC}"
+		$PB -c "Print" "$ldp" 2>/dev/null || echo -e "  ${YEL}(empty/corrupt)${NC}"
 	else
 		echo -e "  ${YEL}(no override)${NC}"
 	fi
 	echo ""
 
 	step "Profiles enrollment status"
-	if command -v profiles &>/dev/null; then
+	if command -v profiles >/dev/null 2>&1; then
 		profiles status -type enrollment 2>/dev/null \
 			|| echo -e "  ${YEL}Cannot check (expected in Recovery)${NC}"
 	else
@@ -772,20 +855,24 @@ check_mdm_status() {
 	fi
 }
 
+# deep_status [--json] [data_mount]
 deep_status() {
-	if [ "${1:-}" = "--json" ]; then
+	local data_mount="${1:-}"
+	local cfg="${data_mount}/private/var/db/ConfigurationProfiles/Settings"
+
+	if [ "$data_mount" = "--json" ]; then
 		deep_status_json
 		return
 	fi
 	header "Deep MDM Audit"
 
 	step "Installed Configuration Profiles"
-	if command -v profiles &>/dev/null; then
-		local profile_count
-		profile_count=$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)
+	local profile_count
+	profile_count=$(count_profiles)
+	if command -v profiles >/dev/null 2>&1; then
 		if [ "$profile_count" -gt 0 ]; then
 			warn "$profile_count profile(s) installed:"
-			sudo profiles -C -output=xml 2>/dev/null | grep -A1 "ProfileDisplayName" | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/  - \1/'
+			sudo profiles -C -output stdout-xml 2>/dev/null | grep -A1 "ProfileDisplayName" | grep "<string>" | sed 's/.*<string>\(.*\)<\/string>.*/  - \1/'
 		else
 			info "No configuration profiles installed"
 		fi
@@ -795,15 +882,16 @@ deep_status() {
 	echo ""
 
 	step "MDM Enrollment State"
-	if command -v profiles &>/dev/null; then
+	if command -v profiles >/dev/null 2>&1; then
 		sudo profiles status -type enrollment 2>/dev/null || echo "  Cannot determine"
 	fi
 	echo ""
 
 	step "MDM Identity Certificates (Keychain)"
-	if command -v security &>/dev/null; then
+	if command -v security >/dev/null 2>&1; then
 		local mdm_certs
 		mdm_certs=$(sudo security find-identity -p basic 2>/dev/null | grep -ci "mdm\|MDM\|Apple.*Push" || true)
+		mdm_certs="${mdm_certs:-0}"
 		if [ "$mdm_certs" -gt 0 ]; then
 			warn "$mdm_certs MDM-related certificate(s) found"
 			sudo security find-identity -p basic 2>/dev/null | grep -i "mdm\|Apple.*Push"
@@ -827,7 +915,9 @@ deep_status() {
 			found=$((found + 1))
 		fi
 	done
-	[ "$found" -eq 0 ] && info "No MDM LaunchAgents found in any user"
+	if [ "$found" -eq 0 ]; then
+		info "No MDM LaunchAgents found in any user"
+	fi
 	echo ""
 
 	step "MDM LaunchDaemons (System)"
@@ -866,7 +956,7 @@ deep_status() {
 
 	step "Overall Assessment"
 	local risk="LOW"
-	[ "$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)" -gt 0 ] && risk="MEDIUM"
+	[ "$profile_count" -gt 0 ] && risk="MEDIUM"
 	ps aux 2>/dev/null | grep -qiE "mdm|managedclient" && risk="HIGH"
 	[ -f "$cfg/.cloudConfigRecordFound" ] && risk="CRITICAL"
 
@@ -879,32 +969,36 @@ deep_status() {
 }
 
 deep_status_json() {
+	local data_mount="${1:-}"
+	local cfg="${data_mount}/private/var/db/ConfigurationProfiles/Settings"
+
 	local json=""
 	json="${json}{\n"
 	json="${json}  \"version\": \"$VERSION\",\n"
 	json="${json}  \"timestamp\": \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\",\n"
 
 	local profile_count=0
-	if command -v profiles &>/dev/null; then
-		profile_count=$(sudo profiles -C -output=xml 2>/dev/null | grep -c "ProfileDisplayName" || echo 0)
-	fi
+	profile_count=$(count_profiles)
 	json="${json}  \"profile_count\": $profile_count,\n"
 
 	local enroll_state="unknown"
-	if command -v profiles &>/dev/null; then
+	if command -v profiles >/dev/null 2>&1; then
 		enroll_state=$(sudo profiles status -type enrollment 2>/dev/null | head -1 | xargs || echo "unknown")
 	fi
+	enroll_state="${enroll_state:-unknown}"
 	enroll_state="${enroll_state//\"/\\\"}"
 	json="${json}  \"enrollment_state\": \"${enroll_state}\",\n"
 
 	local mdm_certs=0
-	if command -v security &>/dev/null; then
+	if command -v security >/dev/null 2>&1; then
 		mdm_certs=$(sudo security find-identity -p basic 2>/dev/null | grep -ci "mdm\|MDM\|Apple.*Push" || true)
+		mdm_certs="${mdm_certs:-0}"
 	fi
 	json="${json}  \"mdm_certificates\": $mdm_certs,\n"
 
 	local running_procs=0
 	running_procs=$(ps aux 2>/dev/null | grep -ciE "mdm|managedclient|activation" || true)
+	running_procs="${running_procs:-0}"
 	running_procs=$((running_procs - 1))
 	[ "$running_procs" -lt 0 ] && running_procs=0
 	json="${json}  \"running_mdm_processes\": $running_procs,\n"
@@ -912,7 +1006,7 @@ deep_status_json() {
 	local risk="LOW"
 	[ "$profile_count" -gt 0 ] && risk="MEDIUM"
 	[ "$running_procs" -gt 0 ] && risk="HIGH"
-	[ -f "/private/var/db/ConfigurationProfiles/Settings/.cloudConfigRecordFound" ] && risk="CRITICAL"
+	[ -f "$cfg/.cloudConfigRecordFound" ] && risk="CRITICAL"
 	json="${json}  \"risk_score\": \"${risk}\"\n"
 
 	json="${json}}"
@@ -1746,23 +1840,28 @@ run_doctor() {
   header "Unleash Doctor — Pre-Flight Check"
 
   local errors=0 warnings=0
+  local _lib lib_count=0 lib_missing=0
 
   begin "Script location"
-  if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR" ]; then
+  if [ -n "${SCRIPT_DIR:-}" ] && [ -d "${SCRIPT_DIR:-}" ]; then
     end_ok; echo "     $SCRIPT_DIR"
   else
-    end_fail; errors=$((errors + 1))
+    end_fail; echo "     Cannot locate script directory"; errors=$((errors + 1))
   fi
 
   begin "Library files"
-  local missing=0
-  for _lib in colors detect validate dscl suppress backup status heal firewall harden whitelist check monitor history; do
-    [ -f "$LIB_DIR/$_lib.sh" ] || missing=$((missing + 1))
+  for _lib in ${UNLEASH_LIBS:-}; do
+    lib_count=$((lib_count + 1))
+    if [ -d "${LIB_DIR:-}" ] && [ ! -f "$LIB_DIR/$_lib.sh" ]; then
+      lib_missing=$((lib_missing + 1))
+    fi
   done
-  if [ "$missing" -eq 0 ]; then
-    end_ok; echo "     13/13 modules loaded"
+  if [ -z "${LIB_DIR:-}" ] || [ ! -d "${LIB_DIR:-}" ]; then
+    end_ok; echo "     $lib_count modules inlined (standalone build)"
+  elif [ "$lib_missing" -eq 0 ]; then
+    end_ok; echo "     $lib_count/$lib_count modules loaded"
   else
-    end_fail; echo "     $missing module(s) missing"; errors=$((errors + 1))
+    end_fail; echo "     $lib_missing module(s) missing"; errors=$((errors + 1))
   fi
 
   begin "Root privileges"
@@ -1782,10 +1881,8 @@ run_doctor() {
   fi
 
   begin "Disk space (Data volume)"
-  local mount_pt
-  mount_pt=$(df / 2>/dev/null | awk 'NR>1 {print $NF; exit}')
   local avail
-  avail=$(df / 2>/dev/null | awk 'NR>1 {print $4; exit}')
+  avail=$(df -k / 2>/dev/null | awk 'NR>1 {print $4; exit}')
   if [ -n "$avail" ] && [ "$avail" -gt 1048576 ]; then
     end_ok; echo "     $(echo "$avail" | awk '{printf "%.0f MB", $1/1024}') free"
   elif [ -n "$avail" ]; then
@@ -1795,31 +1892,38 @@ run_doctor() {
   fi
 
   begin "Internet access"
-  if command -v curl &>/dev/null && curl -s --max-time 3 https://github.com >/dev/null 2>&1; then
+  if command -v curl >/dev/null 2>&1 && curl -s --max-time 3 https://github.com >/dev/null 2>&1; then
     end_ok; echo "     Online"
   else
     end_fail; echo "     Offline (expected in Recovery)"
   fi
 
   begin "pfctl available"
-  if command -v pfctl &>/dev/null; then
+  if command -v pfctl >/dev/null 2>&1; then
     end_ok
   else
     end_fail; echo "     Firewall commands unavailable"
   fi
 
   begin "profiles command"
-  if command -v profiles &>/dev/null; then
+  if command -v profiles >/dev/null 2>&1; then
     end_ok
   else
     end_fail; echo "     Audit/harden commands limited"
   fi
 
   begin "launchctl available"
-  if command -v launchctl &>/dev/null; then
+  if command -v launchctl >/dev/null 2>&1; then
     end_ok
   else
     end_fail; echo "     Persistence commands unavailable"
+  fi
+
+  begin "dirname available"
+  if command -v dirname >/dev/null 2>&1; then
+    end_ok; echo "     Not required by unleash"
+  else
+    end_ok; echo "     Absent — unleash does not use it"
   fi
 
   begin "Third-party firewall"
@@ -2608,6 +2712,417 @@ vpn_kill_status() {
 }
 
 
+cmd_init() {
+  header "unleash init — Setup Wizard"
+
+  echo "This will walk you through setting up unleash for your Mac."
+  echo "Press Ctrl+C at any time to abort."
+  echo ""
+
+  local root_ok=false
+  if is_root; then
+    root_ok=true
+  else
+    warn "Not running as root. Some checks will be limited."
+    echo ""
+  fi
+
+  step "Checking macOS version..."
+  local osver
+  osver=$(sw_vers -productVersion 2>/dev/null || echo "unknown")
+  info "macOS $osver"
+
+  step "Checking architecture..."
+  local arch
+  arch=$(uname -m 2>/dev/null || echo "unknown")
+  info "$arch"
+
+  step "Checking Recovery mode..."
+  if is_recovery; then
+    echo -e "${GRN}✓ Recovery mode${NC}"
+  else
+    echo -e "${YEL}⚠ Not in Recovery${NC}"
+    echo "  Some commands (bypass, suppress) require Recovery."
+  fi
+
+  echo ""
+
+  detect_migration_assistant
+  echo ""
+
+  detect_configurator_enrollment
+  echo ""
+
+  echo -n "Enable pf firewall (blocks MDM at kernel level)? [y/N] "
+  read -r ans
+  if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+    if $root_ok; then
+      install_pf_mdm_block ""
+    else
+      info "Skipping firewall (needs root). Run: sudo ./unleash firewall"
+    fi
+  fi
+
+  echo ""
+  echo -n "Enable MDM monitor (checks every 5 min)? [y/N] "
+  read -r ans
+  if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+    if $root_ok; then
+      install_monitor_launchdaemon ""
+    else
+      info "Skipping monitor (needs root). Run: sudo ./unleash monitor-install"
+    fi
+  fi
+
+  echo ""
+  echo -n "Enable persistent auto-heal (on every boot)? [y/N] "
+  read -r ans
+  if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+    if $root_ok && ! is_recovery; then
+      install_persist_launchdaemon ""
+    elif is_recovery; then
+      echo -e "${YEL}Run after reboot: sudo ./unleash persist${NC}"
+    else
+      info "Skipping persist (needs root). Run: sudo ./unleash persist"
+    fi
+  fi
+
+  echo ""
+  echo -n "Back up current system state? [y/N] "
+  read -r ans
+  if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+    local dm
+    dm=$(resolve_data_volume 2>/dev/null || echo "/")
+    backup_state "$dm"
+  fi
+
+  echo ""
+  success "Setup complete!"
+  info "Recommended next steps:"
+  info "  - From Recovery: ./unleash bypass  (full bypass)"
+  info "  - From Recovery: ./unleash check  (pre-format check)"
+  info "  - After login:   sudo ./unleash harden"
+}
+
+
+cmd_suggest() {
+  header "unleash suggest — Risk-Based Recommendations"
+
+  local score=0
+  local recommendations=""
+
+  step "Analyzing system state..."
+
+  if is_recovery; then
+    info "System is in Recovery mode"
+    recommendations="$recommendations\n  - Run 'bypass' to create admin user + suppress MDM"
+    recommendations="$recommendations\n  - Run 'suppress' to silence enrollment (no user)"
+    recommendations="$recommendations\n  - Run 'check' for pre-format safety report"
+  else
+    info "System is booted normally"
+    recommendations="$recommendations\n  - Run 'sudo ./unleash heal' to check MDM state"
+    recommendations="$recommendations\n  - Run 'sudo ./unleash audit' for deep scan"
+  fi
+
+  local cfg_dir="/private/var/db/ConfigurationProfiles/Settings"
+  if [ -d "$cfg_dir" ]; then
+    if [ -f "$cfg_dir/.cloudConfigRecordFound" ]; then
+      echo -e "${YEL}⚠ DEP record still present${NC}"
+      score=$((score + 10))
+      recommendations="$recommendations\n  - Run 'suppress' to clear DEP markers"
+    fi
+  fi
+
+  local hosts="/etc/hosts"
+  if [ -f "$hosts" ] && grep -q "mdmenrollment.apple.com" "$hosts" 2>/dev/null; then
+    echo -e "${GRN}✓ MDM domains blocked${NC}"
+  else
+    echo -e "${YEL}⚠ MDM domains not blocked${NC}"
+    score=$((score + 5))
+    recommendations="$recommendations\n  - Run 'sudo ./unleash firewall' for pf-level block"
+  fi
+
+  if command -v pfctl &>/dev/null; then
+    if pfctl -a "com.unleash/mdm" -s rules 2>/dev/null | grep -q "block"; then
+      echo -e "${GRN}✓ pf firewall active${NC}"
+    fi
+  fi
+
+  detect_migration_assistant
+  local ma_result=$?
+  if [ "$ma_result" -ne 0 ]; then
+    score=$((score + 8))
+    recommendations="$recommendations\n  - Run 'sudo ./unleash harden' to clean user artifacts"
+  fi
+
+  detect_configurator_enrollment
+  local cfg_result=$?
+  if [ "$cfg_result" -ne 0 ]; then
+    score=$((score + 15))
+    recommendations="$recommendations\n  - Run 'bypass' from Recovery to clear ASM enrollment"
+  fi
+
+  echo ""
+  info "Risk Score: $score"
+  if [ "$score" -eq 0 ]; then
+    echo -e "${GRN}✓ System is clean${NC}"
+  elif [ "$score" -lt 10 ]; then
+    echo -e "${YEL}⚠ Low risk${NC}"
+  elif [ "$score" -lt 20 ]; then
+    echo -e "${YEL}⚠ Medium risk${NC}"
+  else
+    echo -e "${RED}✗ High risk${NC}"
+  fi
+
+  echo ""
+  info "Recommendations:"
+  echo -e "$recommendations" | sed '/^$/d'
+}
+
+
+CMD_SUGGEST=""
+
+known_orgs() {
+  cat << 'ORGS'
+# Known MDM org identifiers and their remediation quirks
+# Format: org_id:description:extra_block_domains
+apple:Apple Internal:apple.com
+jamf:JAMF Pro Managed:jamfcloud.com
+mosyle:Mobile Device Management:mosyle.com
+addigy:Remote Management:addigy.com
+kandji:Device Management:kandji.io
+vmware:Workspace ONE:air-watch.com
+ORGS
+}
+
+cmd_remediate() {
+  header "unleash remediate — Per-Org MDM Cleanup"
+
+  local org="${1:-auto}"
+
+  if [ "$org" = "auto" ] || [ "$org" = "" ]; then
+    step "Detecting MDM organization..."
+    local detected=""
+    if [ -f "/Library/Profiles" ]; then
+      detected=$(plutil -p "/Library/Profiles" 2>/dev/null | grep -iE "jamf|mosyle|addigy|kandji|vmware" | head -1 || true)
+    fi
+    if command -v profiles &>/dev/null; then
+      local profile_info
+      profile_info=$(sudo profiles -P 2>/dev/null || true)
+      for org_line in $(known_orgs | grep -v "^#"); do
+        local org_id
+        local org_desc
+        org_id=$(echo "$org_line" | cut -d: -f1)
+        org_desc=$(echo "$org_line" | cut -d: -f2)
+        if echo "$profile_info" | grep -qi "$org_desc"; then
+          detected="$org_id"
+          info "Detected: $org_desc"
+          break
+        fi
+      done
+    fi
+    if [ -z "$detected" ]; then
+      detected="generic"
+      info "No specific org detected, using generic cleanup"
+    fi
+    org="$detected"
+  fi
+
+  step "Applying $org-specific remediation..."
+
+  local extra_domains=""
+  extra_domains=$(known_orgs | grep "^$org:" | cut -d: -f3 || true)
+
+  local hosts_file="/etc/hosts"
+  if [ -n "$extra_domains" ] && [ -f "$hosts_file" ]; then
+    for domain in $(echo "$extra_domains" | tr ',' ' '); do
+      if ! grep -q "$domain" "$hosts_file" 2>/dev/null; then
+        echo "0.0.0.0 $domain" >> "$hosts_file"
+        info "Blocked: $domain"
+      fi
+    done
+  fi
+
+  info "Running harden..."
+  harden_live_os
+
+  info "Running heal..."
+  heal_suppress ""
+
+  success "Remediation complete for $org"
+  info "If MDM returns, open an issue with the org name."
+}
+
+
+TELEMETRY_FILE="$HOME/.unleash-telemetry"
+
+telemetry_opt_in() {
+  local val="${1:-}"
+  if [ "$val" = "yes" ] || [ "$val" = "true" ] || [ "$val" = "1" ]; then
+    echo "enabled" > "$TELEMETRY_FILE"
+    success "Telemetry enabled"
+  elif [ "$val" = "no" ] || [ "$val" = "false" ] || [ "$val" = "0" ]; then
+    rm -f "$TELEMETRY_FILE"
+    success "Telemetry disabled"
+  else
+    local current="disabled"
+    [ -f "$TELEMETRY_FILE" ] && current="enabled"
+    info "Telemetry: $current"
+    info "Usage: sudo ./unleash telemetry on|off"
+  fi
+}
+
+telemetry_is_enabled() {
+  [ -f "$TELEMETRY_FILE" ] && return 0
+  return 1
+}
+
+telemetry_send() {
+  telemetry_is_enabled || return 0
+  local event="$1"
+  local data="${2:-{}}"
+  local url="https://unleash-telemetry.mateussiqueira.workers.dev/event"
+  local payload
+  payload=$(printf '{"event":"%s","version":"%s","arch":"%s","os":"%s","data":%s}' \
+    "$event" "$VERSION" "$(uname -m)" "$(uname -s)" "$data")
+  curl -s -o /dev/null -w "" -H "Content-Type: application/json" \
+    -d "$payload" "$url" 2>/dev/null || true
+}
+
+
+cmd_predict() {
+  header "unleash predict — Serial Number Lookup"
+
+  local serial=""
+  serial=$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | grep -i "IOPlatformSerialNumber" | awk -F'"' '{print $4}' || echo "")
+
+  if [ -z "$serial" ]; then
+    serial="${1:-}"
+  fi
+  if [ -z "$serial" ]; then
+    read -p "Enter serial number (or press Enter to skip): " serial
+  fi
+  if [ -z "$serial" ]; then
+    info "No serial provided. Run: ./unleash predict <serial>"
+    return 0
+  fi
+
+  step "Looking up: $serial"
+
+  local serial_prefix
+  serial_prefix=$(echo "$serial" | head -c 4)
+
+  info "Serial prefix: $serial_prefix"
+
+  local known_orgs
+  known_orgs=$(cat << 'ORGS'
+F5G:Apple Internal
+C0D:JAMF Managed
+C7G:JAMF Managed
+FVF:JAMF Managed
+H4C:School District Managed
+VMW:VMware Workspace ONE
+M5K:Addigy Managed
+W4P:Kandji Managed
+ORGS)
+
+  local match
+  match=$(echo "$known_orgs" | grep "^$serial_prefix:" || true)
+
+  if [ -n "$match" ]; then
+    local org_name
+    org_name=$(echo "$match" | cut -d: -f2)
+    echo -e "${YEL}⚠ Predicted enrollment: $org_name${NC}"
+    info "This serial prefix is commonly associated with $org_name-managed devices."
+    info "Remediation: sudo ./unleash remediate"
+  else
+    info "No known association for this serial prefix."
+    info "The device may be from a smaller org or not organizationally enrolled."
+  fi
+
+  local check_url="https://billing.c.apple.com/check?sn=${serial}"
+  info "For definitive ownership: https://checkcoverage.apple.com"
+}
+
+
+DISCORD_BOT_DIR="/tmp/unleash-discord"
+DISCORD_BOT_SCRIPT="${DISCORD_BOT_DIR}/bot.sh"
+DISCORD_BOT_PID="${DISCORD_BOT_DIR}/bot.pid"
+
+cmd_discord_bot_install() {
+  header "Install Discord Bot"
+
+  local token="${1:-}"
+  local channel_id="${2:-}"
+  if [ -z "$token" ]; then
+    read -p "Discord Bot Token: " token
+  fi
+  if [ -z "$channel_id" ]; then
+    read -p "Discord Channel ID: " channel_id
+  fi
+  if [ -z "$token" ] || [ -z "$channel_id" ]; then
+    error_exit "Token and channel ID are required"
+  fi
+
+  mkdir -p "$DISCORD_BOT_DIR"
+
+  cat > "$DISCORD_BOT_SCRIPT" <<- BOT
+#!/bin/bash
+# Unleash Discord Bot — monitors MDM and sends alerts
+TOKEN="$token"
+CHANNEL_ID="$channel_id"
+LAST_STATE=""
+while true; do
+  STATE="clean"
+  if [ -f "/private/var/db/ConfigurationProfiles/Settings/.cloudConfigRecordFound" ]; then
+    STATE="dirty"
+  fi
+  if [ "\$STATE" != "\$LAST_STATE" ] && [ "\$STATE" = "dirty" ]; then
+    curl -s -X POST "https://discord.com/api/v10/channels/\$CHANNEL_ID/messages" \
+      -H "Authorization: Bot \$TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"content":"🚨 **Unleash Alert** — MDM enrollment detected on '"$(hostname)"'"}'
+  fi
+  LAST_STATE="\$STATE"
+  sleep 300
+done
+BOT
+  chmod +x "$DISCORD_BOT_SCRIPT"
+
+  nohup bash "$DISCORD_BOT_SCRIPT" > /dev/null 2>&1 &
+  local pid=$!
+  echo "$pid" > "$DISCORD_BOT_PID"
+  success "Discord bot started (PID $pid)"
+  info "To stop: ./unleash discord-bot-stop"
+}
+
+cmd_discord_bot_stop() {
+  if [ -f "$DISCORD_BOT_PID" ]; then
+    local pid
+    pid=$(cat "$DISCORD_BOT_PID")
+    kill "$pid" 2>/dev/null || true
+    rm -f "$DISCORD_BOT_PID"
+    success "Discord bot stopped"
+  else
+    info "Discord bot not running"
+  fi
+}
+
+cmd_discord_bot_status() {
+  if [ -f "$DISCORD_BOT_PID" ]; then
+    local pid
+    pid=$(cat "$DISCORD_BOT_PID")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo -e "${GRN}Discord bot running (PID $pid)${NC}"
+    else
+      echo -e "${YEL}Discord bot not running (stale PID)${NC}"
+    fi
+  else
+    echo -e "${YEL}Discord bot not installed${NC}"
+  fi
+}
+
+
 show_cmd_help() {
 	case "$1" in
 		bypass)     echo "Bypass MDM from Recovery. Creates admin user." ;;
@@ -2705,8 +3220,6 @@ Bypass / suppress / monitor MDM enrollment on macOS.
   Diagnostics:
     doctor          Run pre-flight checks on this environment
     report          Generate a full markdown status report
-    history         Show event log from monitor/heal runs
-    test            Dry-run mode: simulate without changing anything
     demo            Run simulated bypass flow (no real changes)
 
   VPN:
@@ -2743,6 +3256,7 @@ ALIASES
     mn-st           monitor-status
     doc             doctor
     up              update
+    rep             report
     uni             uninstall
     rei             reinstall
     vk              vpn-kill
@@ -2923,7 +3437,7 @@ cmd_audit() {
 	if ! is_root; then
 		error_exit "Audit needs sudo: sudo ./unleash audit"
 	fi
-	deep_status
+	deep_status "${1:-}"
 }
 
 cmd_whitelist() {
@@ -2964,11 +3478,15 @@ cmd_monitor() {
   while [ $# -gt 0 ]; do
     case "$1" in
       install|uninstall) args+=("$1"); shift ;;
-      --webhook) webhook="$2"; shift 2 ;;
+      --webhook)
+        [ $# -ge 2 ] || error_exit "--webhook requires a URL"
+        webhook="$2"
+        shift 2
+        ;;
       *) args+=("$1"); shift ;;
     esac
   done
-  set -- "${args[@]}"
+  set -- ${args[@]+"${args[@]}"}
   if [ -n "$webhook" ]; then
     DISCORD_WEBHOOK="$webhook"
   fi
@@ -3123,23 +3641,31 @@ cmd_interactive_normal() {
 	done
 }
 
+PARSED_ARGS=()
+
 parse_global_opts() {
 	local args=()
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--verbose) VERBOSE=true; shift ;;
 			--dry-run) DRY_RUN=true; shift ;;
-			--log-file) LOG_FILE="$2"; shift 2 ;;
+			--log-file)
+				[ $# -ge 2 ] || error_exit "--log-file requires a path"
+				LOG_FILE="$2"
+				shift 2
+				;;
 			*) args+=("$1"); shift ;;
 		esac
 	done
-	set -- "${args[@]}"
-	echo "$@"
+	PARSED_ARGS=(${args[@]+"${args[@]}"})
 }
 
 main() {
 	load_config
-	eval "set -- $(parse_global_opts "$@")"
+	# No eval/echo round-trip: arguments containing spaces, quotes or glob
+	# characters survive intact, and no argument is silently dropped.
+	parse_global_opts "$@"
+	set -- ${PARSED_ARGS[@]+"${PARSED_ARGS[@]}"}
 
 	# Per-command help
 	if [ "${2:-}" = "--help" ] || [ "${2:-}" = "-h" ]; then
@@ -3156,7 +3682,7 @@ main() {
 		firewall|fw)      cmd_firewall ;;
 		firewall-off|fw-off) cmd_firewall_off ;;
 		harden)           cmd_harden ;;
-		audit)            cmd_audit "$2" ;;
+		audit)            cmd_audit "${2:-}" ;;
 		whitelist|wl)     cmd_whitelist ;;
 		backup)           cmd_backup ;;
 		restore)          cmd_restore ;;
@@ -3172,15 +3698,16 @@ main() {
 		monitor-stop|mn-stop) cmd_monitor_stop ;;
 		monitor-status|mn-st) cmd_monitor_status ;;
 		version|-v|--version) cmd_version ;;
+		doctor|doc)       run_doctor ;;
 		init)            cmd_init ;;
 		suggest)         cmd_suggest ;;
-		remediate)       cmd_remediate "$2" ;;
-		predict)         cmd_predict "$2" ;;
-		telemetry)       telemetry_opt_in "$2" ;;
+		remediate)       cmd_remediate "${2:-}" ;;
+		predict)         cmd_predict "${2:-}" ;;
+		telemetry)       telemetry_opt_in "${2:-}" ;;
 		demo)             run_demo ;;
 		update)           do_self_update ;;
 		uninstall)        do_uninstall ;;
-		report)           generate_report "$2" ;;
+		report|rep)       generate_report "${2:-}" ;;
 		config)           cmd_config "$@" ;;
 		vpn-kill)         vpn_kill_install "$@" ;;
 		vpn-kill-remove)  vpn_kill_remove ;;
@@ -3192,7 +3719,7 @@ main() {
 			install_monitor_launchdaemon ""
 			success "Reinstall complete"
 			;;
-		discord-bot)          cmd_discord_bot_install "$2" "$3" ;;
+		discord-bot)          cmd_discord_bot_install "${2:-}" "${3:-}" ;;
 		discord-bot-stop)     cmd_discord_bot_stop ;;
 		discord-bot-status)   cmd_discord_bot_status ;;
 		help|-h|--help)   show_help; exit 0 ;;

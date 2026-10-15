@@ -4,6 +4,11 @@
 # Shell scripts
 *.sh text eol=lf
 
+# The main script has no extension and would otherwise fall through to
+# `* text=auto`, picking up CRLF on a Windows checkout — a `#!/bin/bash\r`
+# shebang will not run on macOS.
+unleash text eol=lf
+
 # Markdown
 *.md text
 
