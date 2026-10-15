@@ -34,13 +34,14 @@ load_config() {
 			WEBHOOK) DISCORD_WEBHOOK="$value" ;;
 			LOG_LEVEL) [ "$value" = "verbose" ] && VERBOSE=true ;;
 			LOG_FILE) LOG_FILE="$value" ;;
+			HOSTS_SKIP) HOSTS_SKIP_DOMAINS="$value" ;;
 		esac
 	done < "$CONFIG_FILE"
 }
 
 valid_config_key() {
 	case "$1" in
-		WEBHOOK|LOG_LEVEL|LOG_FILE) return 0 ;;
+		WEBHOOK|LOG_LEVEL|LOG_FILE|HOSTS_SKIP) return 0 ;;
 		*) return 1 ;;
 	esac
 }
@@ -92,7 +93,8 @@ cmd_config() {
 			local value="${4:-}"
 			[ -z "$key" ] || [ -z "$value" ] && {
 				info "Usage: ./unleash config set KEY VALUE"
-				info "Keys: WEBHOOK, LOG_LEVEL (verbose), LOG_FILE"
+				info "Keys: WEBHOOK, LOG_LEVEL (verbose), LOG_FILE,"
+				info "      HOSTS_SKIP (domains to leave reachable, comma separated)"
 				return 1
 			}
 			save_config "$key" "$value"

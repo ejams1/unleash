@@ -20,6 +20,17 @@ MDM_DOMAINS=(
 	vpp.itunes.apple.com
 )
 
+# True when the domain is listed in HOSTS_SKIP_DOMAINS (space or comma
+# separated, set through `unleash config set HOSTS_SKIP`).
+domain_is_skipped() {
+	local candidate="$1" item
+	[ -n "${HOSTS_SKIP_DOMAINS:-}" ] || return 1
+	for item in ${HOSTS_SKIP_DOMAINS//,/ }; do
+		[ "$item" = "$candidate" ] && return 0
+	done
+	return 1
+}
+
 # Remove the hosts entries this tool added (the marker comment and the
 # "0.0.0.0 <domain>" / ":: <domain>" lines) without touching anything else.
 strip_hosts_block() {
@@ -77,13 +88,23 @@ suppress_enrollment() {
 	local domains=("${MDM_DOMAINS[@]}")
 	[ -n "$mdm_host" ] && domains+=("$mdm_host")
 
-	local d
+	# HOSTS_SKIP leaves named domains reachable: gdmf.apple.com and
+	# gs.apple.com are also used by software update and by the Rosetta 2
+	# install, which the default block otherwise breaks.
+	local d skipped=""
 	for d in "${domains[@]}"; do
+		if domain_is_skipped "$d"; then
+			skipped="$skipped $d"
+			continue
+		fi
 		grep -qiE "[[:space:]]$d(\$|[[:space:]])" "$hosts" 2>/dev/null \
 			&& { info "$d already blocked"; continue; }
 		printf '0.0.0.0 %s\n::      %s\n' "$d" "$d" >>"$hosts"
 		success "blocked $d"
 	done
+	if [ -n "$skipped" ]; then
+		warn "Left reachable (HOSTS_SKIP):$skipped"
+	fi
 
 	step "Resetting DEP markers..."
 	mkdir -p "$cfg"
